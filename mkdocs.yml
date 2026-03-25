@@ -1,0 +1,91 @@
+site_name: "EXAMPLE_SITE"
+site_description: "Documentação padrão para novos projetos de dados, engenharia, analytics e ML"
+site_author: "Equipe de Dados"
+repo_url: https://github.com/Datadriven-Saga/meta-dados-template-git
+
+docs_dir: docs
+
+theme:
+  name: material
+  language: pt-BR
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: teal
+ 
+nav:
+  - ☁ aws: http://127.0.0.1:8000/
+  - 🏠 Home: index.md
+  - 📖 Visão Geral:
+      - Visão Geral: 01_visao_geral.md
+      - Arquitetura: 02_arquitetura.md
+      - Fluxo: 03_fluxo.md
+  - ☁️ Infraestrutura:
+      - AWS:
+          - Introdução: infra/aws/aws.md
+          - API : infra/aws/api/api.md
+          - Lambda: infra/aws/lambda/lambda.md
+          - Athena: 
+                - tables: infra/aws/athena/tables.md
+                - views: infra/aws/athena/views.md
+          - S3: infra/aws/s3/locations.md
+          - Glue: infra/aws/glue/glue.md
+          - Step Functions: infra/aws/stepfunctions/stepfunctions.md
+          - Secrets Manager: infra/aws/secretmanager/secretmanager.md
+          - VPC: infra/aws/vpc/vpc.md
+      - Power BI (Infra):
+          - Introdução: infra/power_bi/index.md
+          - Fontes de Dados: infra/power_bi/sources.md
+          - Permissões: infra/power_bi/permissions.md
+          - Pipelines: infra/power_bi/pipelines.md
+  - 📊 Analytics:
+      - Guia do Desenvolvedor:
+          - Telas: analytics/developer_guide/telas.md
+          - Relacionamento das tabelas: analytics/developer_guide/relation_tables.md
+          - Medidas: analytics/developer_guide/medidas.md
+          - Modelo semântico: analytics/developer_guide/semantic_model.md
+          - Regras de negocio: analytics/developer_guide/bussines_rules.md
+      - Users:
+          - Guia do Usuário: analytics/power_bi/guide_user.md
+      - Reports:
+        - atualização & workflow: analytics/reports/reports.md
+  - ⚙️ Engenharia de Dados:
+    - Visão Geral e Arquitetura: dataeng/01_visao_geral.md
+        # O que o projeto faz e como ele é desenhado em alto nível.
+    - Fontes e Destinos: dataeng/02_fontes_e_destinos.md
+    - Orquestração e Pipeline:
+        - Pipelines: dataeng/execution/01_pipelines.md
+        # Como os processos são orquestrados (ex: o fluxo no Step Functions).
+        - Monitoramento e Alertas: dataeng/execution/02_monitoramento.md
+        # Como sabemos se algo falhou e onde olhar.
+    - 💻 Guia do Desenvolvedor:
+        - Setup do Ambiente: dataeng/dev_guide/01_setup.md
+        # Como configurar a máquina para começar a trabalhar.
+  - 🤖 ML & IA:
+    - Introdução: ml&ia/index.md
+    - Monitoramento: ml&ia/monitoring.md
+    - Fontes de Dados: ml&ia/data/data_source.md
+    - Regras de negocio: ml&ia/bussines_rules/rules.md
+    - Integrações:
+        - Visão Geral: ml&ia/integrations/integration.md
+        - API: ml&ia/integrations/api.md
+        - AWS: ml&ia/integrations/aws.md
+    - Workflows:
+        - Visão Geral: ml&ia/workflows/workflow.md
+        - Boas Práticas: ml&ia/workflows/best_practices.md
+        - Exemplo de Fluxo: ml&ia/workflows/example_flow.md
+
+markdown_extensions:
+  - admonition
+  - codehilite
+  - toc: {}                    # apenas habilita toc sem parâmetros extras
+  - pymdownx.extra
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+plugins:
+  - search
+  - mermaid2  

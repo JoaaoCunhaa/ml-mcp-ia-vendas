@@ -10,7 +10,6 @@ def formatar_moeda(valor) -> str:
     """Garante que o valor seja '0.00' para a API de precificação."""
     try:
         if isinstance(valor, str):
-            # Remove R$, pontos de milhar e troca vírgula por ponto
             valor = valor.replace("R$", "").replace(".", "").replace(",", ".").strip()
         return "{:.2f}".format(float(valor))
     except (ValueError, TypeError):

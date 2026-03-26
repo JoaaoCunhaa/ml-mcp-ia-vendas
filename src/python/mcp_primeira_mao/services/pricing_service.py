@@ -15,7 +15,6 @@ class PricingService:
     async def calcular_compra(dados_veiculo: dict):
         """Recebe o dicionário de dados e consulta a API de precificação"""
         url = f"{PRECIFICACAO_API_URL}/carro/compra"
-        # Normaliza as chaves e valores para garantir consistência
         params = {
             "placa": dados_veiculo.get("placa"),
             "valor_fipe": str(dados_veiculo.get("valor_fipe")),

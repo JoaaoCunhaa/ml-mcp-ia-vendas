@@ -10,8 +10,6 @@ class FipeService:
         """
         placa_limpa = placa.upper().replace("-", "").strip()
         
-        # URL da sua API de consulta FIPE por placa
-        # Ajuste para o endpoint real utilizado no Primeira Mão / Saga
         url = f"https://api.sagametadados.com.br/fipe/v1/placa/{placa_limpa}"
         
         logger.info(f"Consultando FIPE para placa: {placa_limpa}")
@@ -20,7 +18,6 @@ class FipeService:
             async with httpx.AsyncClient(timeout=TIMEOUT) as client:
                 resp = await client.get(url)
                 
-                # Se a placa não for encontrada ou a API falhar
                 if resp.status_code != 200:
                     logger.warning(f"Placa {placa_limpa} não localizada na base FIPE.")
                     return {
@@ -30,7 +27,6 @@ class FipeService:
                 
                 dados = resp.json()
                 
-                # Retornamos o objeto mapeado para facilitar a vida do ChatGPT
                 return {
                     "placa": placa_limpa,
                     "marca": dados.get("marca"),

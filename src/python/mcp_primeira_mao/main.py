@@ -10,6 +10,8 @@ from utils.helpers import formatar_moeda, normalizar_placa
 
 mcp = FastMCP("PrimeiraMaoSaga")
 
+# TOOLS 
+
 @mcp.tool()
 def listar_lojas():
     """Retorna a lista de todas as lojas 'Primeira Mão' e seus Dealer IDs."""
@@ -17,18 +19,13 @@ def listar_lojas():
 
 @mcp.tool()
 async def search_veiculos(marca: str = None, modelo: str = None, cidade: str = None, preco_max: float = None):
-    """
-    Busca veículos em TODO o estoque consolidado da rede.
-    Use para encontrar carros por marca, modelo ou preço.
-    """
+    """Busca veículos em TODO o estoque consolidado da rede."""
     estoque = await InventoryAggregator.buscar_estoque_consolidado()
     res = estoque
-
     if marca: res = [v for v in res if marca.lower() in str(v.get('brand','')).lower()]
     if modelo: res = [v for v in res if modelo.lower() in str(v.get('model','')).lower()]
     if cidade: res = [v for v in res if cidade.lower() in str(v.get('city','')).lower()]
     if preco_max: res = [v for v in res if float(v.get('sellingPrice', 0)) <= preco_max]
-
     return [{
         "id": str(v.get("id")),
         "veiculo": f"{v.get('brand')} {v.get('model')} {v.get('modelYear')}",
@@ -51,7 +48,7 @@ async def buscar_fipe(placa: str):
 
 @mcp.tool()
 async def avaliar_veiculo(placa:str, valor_fipe:str, marca:str, modelo:str, ano_modelo:str, km:str, uf:str="GO"):
-    """Calcula a oferta de compra da loja. SEMPRE pergunte o KM ao cliente antes."""
+    """Calcula a oferta de compra da loja."""
     dados = {
         "placa": normalizar_placa(placa),
         "valor_fipe": formatar_moeda(valor_fipe),
@@ -60,14 +57,8 @@ async def avaliar_veiculo(placa:str, valor_fipe:str, marca:str, modelo:str, ano_
     }
     return await PricingService.calcular(dados)
 
-@mcp.server.app.get("/.well-known/openai-subdomain-verification.txt")
-async def verify_openai():
-    return "openai-subdomain-verification-token-CODIGO"
-
 if __name__ == "__main__":
-    if MCP_TRANSPORT == "sse":
-        logger.info("Modo SSE Ativado")
+    if os.getenv("MCP_TRANSPORT") == "sse":
         mcp.run(transport="sse")
     else:
-        logger.info("Modo STDIO Ativado")
         mcp.run()

@@ -17,7 +17,7 @@ class InventoryAggregator:
             logger.warning(f"Erro no banco, tentando mock: {e}")
         
         # Sobe um nível para achar a pasta database a partir de services/
-        caminho_mock = os.path.join(os.path.dirname(__file__), "..", "database", "lojas_mock.json")
+        caminho_mock = os.path.join(os.path.dirname(__file__), "..", "database", "lojas_mock.csv")
         if os.path.exists(caminho_mock):
             with open(caminho_mock, "r", encoding="utf-8") as f:
                 return json.load(f)

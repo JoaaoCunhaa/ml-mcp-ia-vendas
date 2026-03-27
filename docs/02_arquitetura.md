@@ -1,5 +1,7 @@
-# 🏗️ Arquitetura
-EXAMPLE CARTEIRA VENDENDOR
+# 🏗️ Arquitetura: MCP Primeira Mão Saga
+
+A arquitetura do projeto é baseada no protocolo **MCP (Model Context Protocol)**, utilizando uma abordagem de micro-serviços em Python para conectar modelos de linguagem a fontes de dados automotivas proprietárias.
+
 ## Sumário
 - [Visão de Componentes](#visão-de-componentes)  
 - [Descrição dos Serviços](#descrição-dos-serviços)  
@@ -9,51 +11,67 @@ EXAMPLE CARTEIRA VENDENDOR
 
 ## Visão de Componentes
 
-A arquitetura distribui-se em camadas:
+A arquitetura distribui-se em camadas funcionais:
 
-1. **Ingestão**: AWS DMS & scripts → S3 raw  
-2. **Processamento**: AWS Glue / Python → S3 stage/curated  
-3. **Orquestração**: Step Functions & EventBridge  
-4. **Catálogo**: Athena views  
-5. **Consumo**: Power BI dashboards e API Lambda  
+1. **Protocolo (Interface)**: FastMCP atuando como servidor de comunicação via stdio/SSE.
+2. **Serviços (Lógica)**: Camada de agregação de estoque, consulta FIPE e motores de precificação.
+3. **Integração (APIs)**: Conectores assíncronos para API externa (**MobiGestor**) e APIs internas (**Saga**).
+4. **Persistência**: Banco de Dados PostgreSQL da Saga para gestão de unidades e configurações.
+5. **Fallback**: Camada de resiliência baseada em arquivos CSV para garantir operabilidade offline.
 
 ## Descrição dos Serviços
 
-- **Amazon S3**: armazenamento raw, stage e curated.  
-- **AWS Glue**: transformações ETL em Python.  
-- **AWS Step Functions**: orquestração de pipelines.  
-- **Amazon Athena**: consultas SQL e criação de views.  
-- **AWS Lambda**: enpoint `carteiraVendedorSalvarAtividade`.  
-- **API Gateway**: interface REST para Lambda.  
-- **Power BI**: dashboards de consumo.
+- **FastMCP (Python)**: Framework core que expõe as `tools` (ferramentas) para o ChatGPT/Inspector.
+- **Inventory Aggregator**: Serviço central que consolida o estoque de veículos seminovos.
+- **Saga Fipe Service**: API interna do Grupo Saga para busca de dados técnicos e valores de referência via placa.
+- **Saga Pricing Service**: Motor de precificação proprietário que calcula propostas de compra/troca.
+- **PostgreSQL (Saga)**: Repositório oficial de mapeamento das lojas, unidades e credenciais.
+- **MobiGestor API (Mobiauto)**: Única fonte externa, utilizada para busca de estoque bruto, fotos e opcionais.
+- **Inspector/ChatGPT App**: Interfaces de consumo final que interagem com o servidor MCP.
 
 ## Diagrama de Componentes
 
 ```mermaid
 flowchart TB
-  subgraph Ingestão
-    DMS["AWS DMS (Dealer/NBS)"]
-  end
-  subgraph Data Lake
-    S3["Amazon S3"] --> Glue["AWS Glue (Python ETL)"] --> Athena["Amazon Athena"]
-  end
-  subgraph Orquestração
-    SF["Step Functions"]
-  end
-  subgraph API
-    APIGW["API Gateway"]-->Lambda["Lambda:SalvarAtividade"]
-  end
-  subgraph BI
-    PB["Power BI"]
-  end
+    subgraph Cliente_Interface
+        LLM["ChatGPT / Claude (Apps)"]
+        INSP["MCP Inspector"]
+    end
 
-  DMS --> S3
-  SF --> Glue
-  Glue --> S3
-  S3 --> Athena
-  Athena --> PB
-  PB --> APIGW
-  APIGW --> Lambda
-  Lambda --> S3
+    subgraph Servidor_MCP_Python
+        FAST["FastMCP Server"]
+        LOGIC["Logic: Inventory Aggregator"]
+        PRIC["Logic: Saga Pricing"]
+        FIPE["Logic: Saga Fipe"]
+    end
+
+    subgraph Infraestrutura_Saga
+        DB[("PostgreSQL: Lojas & Unidades")]
+        CSV["CSV Fallback"]
+        API_P["API Saga: Precificação"]
+        API_F["API Saga: Fipe"]
+    end
+
+    subgraph Integracao_Externa
+        API_M["API MobiGestor (Estoque)"]
+    end
+
+    %% Fluxo de Comunicação
+    LLM <-->|SSE / stdio| FAST
+    INSP <-->|stdio| FAST
+
+    FAST --> LOGIC
+    FAST --> PRIC
+    FAST --> FIPE
+
+    %% Relacionamentos de Dados
+    LOGIC --> DB
+    LOGIC --> CSV
+    LOGIC --> API_M
+    
+    PRIC --> API_P
+    FIPE --> API_F
+    
+    API_M -.->|Dados Brutos| LOGIC
 
 ```

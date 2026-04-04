@@ -1,46 +1,64 @@
 import httpx
-from config import TIMEOUT, logger
+from config import PRECIFICACAO_API_URL, TIMEOUT, logger
 
 class FipeService:
     @staticmethod
     async def consultar_por_placa(placa: str):
         """
-        Consulta os dados técnicos e o valor da Tabela FIPE 
-        utilizando a placa do veículo.
+        Realiza a busca exatamente como o fluxo n8n:
+        - Endpoint: {PRECIFICACAO_API_URL}/fipe
+        - Método: GET
+        - Parâmetro: ?placa=SBY3C19
         """
+        # Equivalente ao node 'normaliza_placa' do n8n (body.placa -> placa)
         placa_limpa = placa.upper().replace("-", "").strip()
-        
-        url = f"https://api.sagametadados.com.br/fipe/v1/placa/{placa_limpa}"
-        
-        logger.info(f"Consultando FIPE para placa: {placa_limpa}")
-        
+
+        url = f"{PRECIFICACAO_API_URL}/fipe"
+        params = {"placa": placa_limpa}
+
+        logger.info(f"Iniciando busca_fipe | URL: {url} | Placa: {placa_limpa}")
+
         try:
-            async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-                resp = await client.get(url)
-                
-                if resp.status_code != 200:
-                    logger.warning(f"Placa {placa_limpa} não localizada na base FIPE.")
+            # Equivalente ao node 'busca_fipe' do n8n (GET com query param)
+            async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
+                resp = await client.get(url, params=params)
+
+                if resp.is_error:
+                    logger.error(f"Erro na API FIPE: {resp.status_code} - {resp.text}")
                     return {
-                        "error": "Veículo não encontrado",
-                        "mensagem": "Não conseguimos localizar os dados da FIPE para esta placa. Verifique se a placa está correta."
+                        "error": f"Erro {resp.status_code}",
+                        "mensagem": "Falha na comunicação com a API de precificação.",
+                        "detalhe": resp.text
                     }
-                
-                dados = resp.json()
-                
+
+                dados_raw = resp.json()
+
+                # n8n retorna os itens como lista; pegamos o primeiro elemento
+                dados = dados_raw[0] if isinstance(dados_raw, list) and len(dados_raw) > 0 else dados_raw
+
+                if not dados:
+                    return {"error": "Não encontrado", "mensagem": "Placa não localizada na base Saga."}
+
+                logger.info(f"Busca FIPE realizada com sucesso | Placa: {placa_limpa}")
+
                 return {
                     "placa": placa_limpa,
                     "marca": dados.get("marca"),
                     "modelo": dados.get("modelo"),
-                    "ano_modelo": dados.get("ano_modelo") or dados.get("anoModelo"),
-                    "valor_fipe": dados.get("valor") or dados.get("preco"),
-                    "combustivel": dados.get("combustivel"),
-                    "codigo_fipe": dados.get("codigo_fipe") or dados.get("codigoFipe"),
+                    "ano_modelo": str(dados.get("ano_modelo") or dados.get("anoModelo") or ""),
+                    "valor_fipe": dados.get("valor") or dados.get("preco") or 0,
+                    "combustivel": dados.get("combustivel") or "Flex",
+                    "codigo_fipe": dados.get("codigo_fipe") or dados.get("codigoFipe") or "",
                     "mes_referencia": dados.get("mes_referencia", "Mês atual")
                 }
 
-        except httpx.ConnectError:
-            logger.error("Falha de conexão com o serviço de FIPE.")
-            return {"error": "Serviço indisponível", "mensagem": "O serviço de consulta FIPE está temporariamente fora do ar."}
+        except httpx.ConnectError as exc:
+            logger.error(f"Erro de conexão com a API FIPE: {str(exc)}")
+            return {
+                "error": "Conexão falhou",
+                "mensagem": "Não foi possível estabelecer conexão com o servidor da Saga.",
+                "tecnico": str(exc)
+            }
         except Exception as e:
-            logger.error(f"Erro inesperado na consulta FIPE: {e}")
-            return {"error": "Erro interno", "detail": str(e)}
+            logger.exception(f"Erro inesperado no FipeService: {e}")
+            return {"error": "Erro interno", "detalhe": str(e)}

@@ -63,26 +63,59 @@ async def buscar_fipe(placa: str):
 
 @mcp.tool()
 async def avaliar_veiculo(
-    placa: str, 
-    valor_fipe: str, 
-    marca: str, 
-    modelo: str, 
-    ano_modelo: str, 
-    km: str, 
-    uf: str
+    placa: str,
+    km: str,
+    uf: str,
+    cor: str,
+    tipo: str,
+    versao: Optional[str] = "não",
+    existe_zero_km: Optional[str] = "não",
+    tipo_carroceria: Optional[str] = "não",
 ):
     """
-    Calcula a proposta de avaliação para compra/troca baseada na API de precificação do Grupo Saga.
+    Calcula a proposta de compra/troca do veículo.
+
+    Fluxo interno:
+      1. Consulta a FIPE pela placa para obter marca, modelo, ano, valor FIPE, código FIPE e combustível.
+      2. Combina com os dados informados pelo cliente.
+      3. Envia tudo para a API de precificação do Grupo Saga.
+
+    Peça ao cliente APENAS: placa, km, uf, cor, tipo (ex: HATCH/SEDAN/SUV).
+    versao, existe_zero_km e tipo_carroceria são opcionais — use "não" se não informados.
     """
+    placa_limpa = normalizar_placa(placa)
+
+    # Passo 1: busca FIPE para preencher automaticamente os campos técnicos
+    fipe = await FipeService.consultar_por_placa(placa_limpa)
+
+    if "error" in fipe:
+        return {
+            "error": "Não foi possível consultar a FIPE.",
+            "detalhe": fipe,
+            "mensagem": "Verifique a placa informada e tente novamente."
+        }
+
+    # Passo 2: monta o payload combinando dados da FIPE + dados do cliente
     dados = {
-        "placa": normalizar_placa(placa), 
-        "valor_fipe": valor_fipe, 
-        "marca": marca, 
-        "modelo": modelo, 
-        "ano_modelo": ano_modelo, 
-        "km": km, 
-        "uf": uf
+        "placa": placa_limpa,
+        "valor_fipe": str(fipe.get("valor_fipe") or 0),
+        "marca": fipe.get("marca") or "Não Informada",
+        "modelo": fipe.get("modelo") or "Não Informado",
+        "versao": versao or "não",
+        "tipo_combustivel": fipe.get("combustivel") or "Flex",
+        "ano_modelo": str(fipe.get("ano_modelo") or ""),
+        "codigo_fipe": fipe.get("codigo_fipe") or "",
+        "uf": uf,
+        "tipo": tipo,
+        "km": km,
+        "cor": cor,
+        "existe_zero_km": existe_zero_km or "não",
+        "tipo_carroceria": tipo_carroceria or "não",
     }
+
+    logger.info(f"Avaliação iniciada | Placa: {placa_limpa} | FIPE: R${dados['valor_fipe']}")
+
+    # Passo 3: chama a API de precificação
     return await PricingService.calcular_compra(dados)
 
 if __name__ == "__main__":

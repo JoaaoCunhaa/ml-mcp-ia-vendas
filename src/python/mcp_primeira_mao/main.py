@@ -1,5 +1,13 @@
 import os
 import sys
+
+# Garante que o diretório do script está no sys.path independente do CWD.
+# Necessário para o MCP Inspector, que pode rodar python main.py de outro diretório.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+import re
 from typing import Optional
 from fastmcp import FastMCP
 from services.inventory_aggregator import InventoryAggregator
@@ -10,176 +18,427 @@ from config import logger
 
 mcp = FastMCP("PrimeiraMaoSaga")
 
+# ─────────────────────────────────────────────────────────────
+# INSTRUÇÃO GLOBAL DE RENDERIZAÇÃO DE CARDS DE VEÍCULOS
+#
+# Campos disponíveis em cada veículo:
+#   titulo_card, url_imagem, loja_unidade, modelYear, km,
+#   colorName, preco_formatado, link_ofertas,
+#   makeName, modelName, trimName, plate, id
+#
+# Formato obrigatório do card:
+#
+#   ![{titulo_card}]({url_imagem})
+#   ### **{titulo_card}**
+#   | Campo | Valor |
+#   |---|---|
+#   | 📍 Loja | {loja_unidade} |
+#   | 🗓️ Ano | {modelYear} |
+#   | 📏 KM | {km} km |
+#   | 🎨 Cor | {colorName} |
+#   ## 💰 {preco_formatado}
+#   [🛒 Ver oferta no site](link_ofertas)
+#   ---
+# ─────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────
+# HELPERS DE BUSCA — extração de palavras-chave em linguagem natural
+# ─────────────────────────────────────────────────────────────
+
+_STOPWORDS = {
+    "quero", "um", "uma", "me", "mostra", "mostrar", "preciso", "de", "para",
+    "com", "que", "o", "a", "os", "as", "tem", "ter", "ver", "buscar",
+    "procurar", "algum", "alguma", "e", "ou", "do", "da", "dos", "das",
+    "no", "na", "nos", "nas", "em", "por", "se", "mais", "mas", "nao",
+    "não", "sim", "ok", "carro", "veiculo", "veículo", "modelo", "marca",
+    "cor", "ano", "gostaria", "queria", "seria", "possivel", "possível",
+    "teria", "tenha", "qual", "quais", "ta", "tá", "ai", "aí", "é",
+    "esta", "está", "esse", "essa", "aquele", "aquela", "meu", "minha",
+    "seu", "sua", "tipo", "tem", "tiver", "ja", "já", "so", "só",
+}
+
+def _parece_id_ou_placa(termo: str) -> bool:
+    """True se o termo tem formato de placa brasileira ou ID numérico."""
+    t = termo.strip().upper().replace("-", "").replace(" ", "")
+    return bool(
+        re.match(r'^[A-Z]{3}\d{4}$', t) or        # placa antiga: ABC1234
+        re.match(r'^[A-Z]{3}\d[A-Z]\d{2}$', t) or  # placa Mercosul: ABC1D23
+        re.match(r'^\d{5,10}$', t)                 # ID numérico
+    )
+
+def _extrair_palavras_chave(consulta: str) -> list:
+    """Extrai termos significativos ignorando stopwords e artigos."""
+    palavras = re.split(r'[\s,;.!?/\\]+', consulta.lower().strip())
+    return [p for p in palavras if p and p not in _STOPWORDS and len(p) >= 2]
+
+def _score_veiculo(v: dict, palavras: list) -> int:
+    """Conta quantas palavras-chave batem nos campos do veículo."""
+    campos_str = " ".join([
+        str(v.get("makeName",    "")),
+        str(v.get("modelName",   "")),
+        str(v.get("trimName",    "")),
+        str(v.get("colorName",   "")),
+        str(v.get("modelYear",   "")),
+        str(v.get("loja_unidade","")),
+        str(v.get("plate",       "")),
+        str(v.get("id",          "")),
+    ]).lower()
+    return sum(1 for p in palavras if p in campos_str)
+
+
+INSTRUCAO_CARD = """RENDERIZAÇÃO OBRIGATÓRIA — para cada veículo, monte o seguinte Card em Markdown:
+
+```
+![{titulo_card}]({url_imagem})
+### **{titulo_card}**
+| | |
+|---|---|
+| 📍 Loja | {loja_unidade} |
+| 🗓️ Ano | {modelYear} |
+| 📏 KM | {km} km |
+| 🎨 Cor | {colorName} |
+
+## 💰 {preco_formatado}
+[🛒 Ver oferta no site]({link_ofertas})
+```
+---
+Regras:
+- A imagem DEVE aparecer antes do título
+- Use a tabela para os detalhes (não lista simples)
+- O preço em ## para destaque visual
+- O botão [🛒 Ver oferta no site] SEMPRE com o link_ofertas do veículo
+- Separe cada card com ---
+- Tom: profissional e direto. Sem parágrafos longos entre cards."""
+
+
+# ─────────────────────────────────────────────────────────────
+# TOOLS
+# ─────────────────────────────────────────────────────────────
+
 @mcp.tool()
 async def listar_lojas():
-    """Lista as lojas configuradas no banco de dados ou no arquivo de fallback (lojas_mock.csv)."""
-    return await InventoryAggregator.obter_lista_lojas()
+    """
+    Lista todas as lojas Primeira Mão Saga cadastradas com nome, cidade e UF.
+
+    RENDERIZAÇÃO: uma loja por linha no formato:
+      📍 **{nome}** — {cidade} / {uf}
+    Informe a fonte dos dados (banco ou arquivo local) no rodapé.
+    """
+    logger.info("[listar_lojas] Chamada iniciada")
+    resultado = await InventoryAggregator.obter_lista_lojas()
+    fonte = InventoryAggregator._ultima_fonte or "desconhecida"
+    logger.info(f"[listar_lojas] Concluída | Total: {len(resultado)} | fonte={fonte}")
+    return {
+        "lojas": resultado,
+        "total": len(resultado),
+        "fonte_dados": fonte,
+        "instrucao_renderizacao": (
+            "Exiba cada loja em uma linha: 📍 **{nome}** — {cidade} / {uf}. "
+            "Informe no rodapé: fonte dos dados e total de lojas."
+        ),
+    }
+
 
 @mcp.tool()
-async def estoque_total():
-    """Retorna o estoque completo de todas as unidades mapeadas do Grupo Saga."""
-    return await InventoryAggregator.buscar_estoque_consolidado()
+async def estoque_total(pagina: Optional[int] = 1):
+    """
+    Exibe o estoque de veículos disponíveis nas lojas Primeira Mão Saga, 3 lojas por vez.
+
+    - pagina=1 (padrão): primeiras 3 lojas.
+    - pagina=2, 3…: próximas lojas — use quando o usuário pedir "ver mais".
+
+    Cada veículo retorna: titulo_card, url_imagem, loja_unidade, modelYear,
+    km, colorName, preco_formatado, link_ofertas.
+
+    RENDERIZAÇÃO OBRIGATÓRIA — para cada veículo exiba o Card completo:
+      ![{titulo_card}]({url_imagem})
+      ### **{titulo_card}**
+      | 📍 Loja | {loja_unidade} |
+      | 🗓️ Ano | {modelYear} |
+      | 📏 KM | {km} km |
+      | 🎨 Cor | {colorName} |
+      ## 💰 {preco_formatado}
+      [🛒 Ver oferta no site]({link_ofertas})
+      ---
+    Ao final exiba apenas o campo "aviso" (ex: "Página 1 de 5 — diga 'ver mais' para continuar.").
+    O bloco "_meta" contém dados internos de diagnóstico — NÃO exiba nenhum campo de "_meta" para o cliente.
+    Tom: profissional e direto.
+    """
+    logger.info(f"[estoque_total] Chamada iniciada | pagina={pagina}")
+    resultado = await InventoryAggregator.buscar_estoque_paginado(pagina=pagina)
+
+    veiculos       = resultado["veiculos"]
+    tem_mais       = resultado["tem_mais"]
+    pagina_atual   = resultado["pagina"]
+    total_paginas  = resultado["total_paginas"]
+    fonte          = resultado["fonte_lojas"]
+    lojas_buscadas = resultado["lojas_buscadas"]
+
+    logger.info(
+        f"[estoque_total] Concluída | veículos={len(veiculos)} | "
+        f"pagina={pagina_atual}/{total_paginas} | fonte={fonte}"
+    )
+
+    aviso = (
+        f"Página {pagina_atual} de {total_paginas} — diga **'ver mais'** para ver as próximas lojas."
+        if tem_mais else
+        f"Última página ({pagina_atual} de {total_paginas}) — todas as lojas foram exibidas."
+    )
+
+    return {
+        "instrucao_renderizacao": INSTRUCAO_CARD,
+        "_meta": {
+            "total_veiculos": len(veiculos),
+            "pagina":         pagina_atual,
+            "total_paginas":  total_paginas,
+            "lojas_buscadas": lojas_buscadas,
+            "fonte_lojas":    fonte,
+            "aviso":          aviso,
+            "nota":           "Este bloco _meta é para uso interno do sistema. NÃO exiba estes dados para o cliente.",
+        },
+        "veiculos":       veiculos,
+        "aviso":          aviso,
+    }
+
 
 @mcp.tool()
-async def search_veiculos(
-    marca: Optional[str] = None, 
-    modelo: Optional[str] = None, 
-    preco_max: Optional[float] = None
-):
+async def buscar_veiculo(consulta: Optional[str] = None):
     """
-    Busca inteligente no estoque. Todos os campos são opcionais.
-    Resolve erros de validação permitindo valores nulos da interface.
-    """
-    estoque = await InventoryAggregator.buscar_estoque_consolidado()
-    
-    if marca is None and modelo is None and preco_max is None:
-        return estoque[:20]
+    Busca curinga: encontra veículos a partir de qualquer descrição em linguagem natural.
+    Exemplos: "quero um corolla branco 2019", "hb20 prata", "abc1234", "SUV abaixo de 80 mil".
 
-    res = []
-    for v in estoque:
-        match_marca = not marca or str(marca).lower() in str(v.get('makeName', '')).lower()
-        match_modelo = not modelo or str(modelo).lower() in str(v.get('modelName', '')).lower()
-        
-        valor_veiculo = float(v.get('salePrice') or v.get('price') or 0)
-        match_preco = preco_max is None or valor_veiculo <= preco_max
-        
-        if match_marca and match_modelo and match_preco:
-            res.append(v)
-        
-    return res[:40]
+    Estratégia em 4 fases — NUNCA retorna vazio:
+      1. ID ou placa exata → busca direta em todas as lojas.
+      2. Todos os termos batem (AND) → resultado preciso.
+      3. Parte dos termos bate (OR, ordenado por relevância) → similares.
+      4. Nenhum termo bate → sugestões do estoque disponível.
 
-@mcp.tool()
-async def fetch_veiculo_detalhado(identificador: str):
-    """
-    Retorna o dossiê completo de um veículo (fotos, opcionais e dados técnicos).
-    Aceita ID da Mobiauto ou Placa como identificador.
-    """
-    return await InventoryAggregator.buscar_veiculo_especifico(identificador)
+    Cada veículo retorna: titulo_card, url_imagem, loja_unidade, modelYear,
+    km, colorName, plate, preco_formatado, link_ofertas.
 
-@mcp.tool()
-async def buscar_fipe(placa: str):
-    """Consulta o valor atualizado da Tabela FIPE e dados técnicos via placa."""
-    return await FipeService.consultar_por_placa(normalizar_placa(placa))
+    RENDERIZAÇÃO OBRIGATÓRIA — para cada veículo exiba o Card completo:
+      ![{titulo_card}]({url_imagem})
+      ### **{titulo_card}**
+      | 📍 Loja | {loja_unidade} |
+      | 🗓️ Ano | {modelYear} |
+      | 📏 KM | {km} km |
+      | 🎨 Cor | {colorName} |
+      | 🔖 Placa | {plate} |
+      ## 💰 {preco_formatado}
+      [🛒 Ver oferta no site]({link_ofertas})
+      ---
+    Se o campo "mensagem" estiver presente, exiba-o ANTES dos cards.
+    Tom: profissional e direto.
+    """
+    if not consulta or not consulta.strip():
+        # Sem consulta: retorna estoque da primeira página como sugestão
+        return await estoque_total(pagina=1)
+
+    logger.info(f"[buscar_veiculo] Chamada iniciada | consulta='{consulta}'")
+    termo = consulta.strip()
+
+    # ── Fase 1: ID ou placa exata (só executa se o termo parece placa/ID) ──
+    if _parece_id_ou_placa(termo):
+        resultado_exato = await InventoryAggregator.buscar_veiculo_especifico(termo)
+        if resultado_exato:
+            logger.info(f"[buscar_veiculo] Fase 1 — encontrado por ID/placa")
+            return {
+                "instrucao_renderizacao": INSTRUCAO_CARD,
+                "total":    1,
+                "veiculos": [resultado_exato],
+            }
+
+    # ── Carrega TODO o estoque de TODAS as lojas ──
+    estoque = await InventoryAggregator.buscar_estoque_consolidado(limit=None)
+    logger.info(f"[buscar_veiculo] Estoque carregado | {len(estoque)} veículos em todas as lojas")
+
+    # Extrai palavras-chave ignorando artigos/stopwords ("quero", "um", "cor", etc.)
+    palavras = _extrair_palavras_chave(consulta)
+    if not palavras:
+        palavras = [termo.lower()]  # fallback: usa o termo bruto
+    logger.info(f"[buscar_veiculo] Palavras-chave extraídas | {palavras}")
+
+    # ── Fase 2: AND — veículos que batem com TODOS os termos ──
+    res_and = [v for v in estoque if _score_veiculo(v, palavras) == len(palavras)]
+    if res_and:
+        logger.info(f"[buscar_veiculo] Fase 2 (AND) — {len(res_and)} resultados exatos")
+        return {
+            "instrucao_renderizacao": INSTRUCAO_CARD,
+            "total":    len(res_and[:40]),
+            "veiculos": res_and[:40],
+        }
+
+    # ── Fase 3: OR com ranking — ordena por quantos termos batem ──
+    scored = [
+        (v, _score_veiculo(v, palavras))
+        for v in estoque
+        if _score_veiculo(v, palavras) > 0
+    ]
+    scored.sort(key=lambda x: x[1], reverse=True)
+
+    if scored:
+        res_or = [v for v, _ in scored[:40]]
+        top_score = scored[0][1]
+        logger.info(f"[buscar_veiculo] Fase 3 (OR) — {len(res_or)} similares | top_score={top_score}/{len(palavras)}")
+        return {
+            "instrucao_renderizacao": INSTRUCAO_CARD,
+            "mensagem": f"Não encontramos exatamente '{consulta}', mas veja as opções mais próximas:",
+            "total":    len(res_or),
+            "veiculos": res_or,
+        }
+
+    # ── Fase 4: Sem nenhuma correspondência — retorna sugestões gerais ──
+    sugestoes = [v for v in estoque if v.get("url_imagem")][:20]
+    logger.info(f"[buscar_veiculo] Fase 4 — sem resultado, sugerindo {len(sugestoes)} veículos")
+    return {
+        "instrucao_renderizacao": INSTRUCAO_CARD,
+        "mensagem": (
+            f"Não encontramos '{consulta}' no estoque atual. "
+            "Confira outras opções disponíveis:"
+        ),
+        "total":    len(sugestoes),
+        "veiculos": sugestoes,
+    }
+
+
+# ─────────────────────────────────────────────────────────────
+# FUNÇÕES INTERNAS (não são tools)
+# ─────────────────────────────────────────────────────────────
+
+async def _buscar_fipe(placa_limpa: str) -> dict:
+    """Consulta a FIPE pela placa para alimentar o payload de precificação."""
+    logger.info(f"[_buscar_fipe] Consultando FIPE | placa={placa_limpa}")
+    resultado = await FipeService.consultar_por_placa(placa_limpa)
+    if "error" in resultado:
+        logger.warning(f"[_buscar_fipe] Erro | placa={placa_limpa} | detalhe={resultado}")
+    else:
+        logger.info(
+            f"[_buscar_fipe] Dados obtidos | marca={resultado.get('marca')} "
+            f"| modelo={resultado.get('modelo')} | ano={resultado.get('ano_modelo')} "
+            f"| valor_fipe={resultado.get('valor_fipe')} | combustivel={resultado.get('combustivel')} "
+            f"| codigo_fipe={resultado.get('codigo_fipe')}"
+        )
+    return resultado
+
+
+# ─────────────────────────────────────────────────────────────
+# TOOL: AVALIAÇÃO DE VEÍCULO DO CLIENTE (com botão de venda embutido)
+# ─────────────────────────────────────────────────────────────
 
 @mcp.tool()
 async def avaliar_veiculo(
     placa: str,
     km: str,
-    uf: str,
-    cor: str,
-    tipo: str,
-    versao: Optional[str] = "não",
-    existe_zero_km: Optional[str] = "não",
-    tipo_carroceria: Optional[str] = "não",
+    uf: Optional[str] = None,
+    cor: Optional[str] = None,
+    existe_zero_km: Optional[str] = None,
 ):
     """
-    Calcula a proposta de compra/troca do veículo.
+    Calcula a proposta de compra/troca do veículo do cliente.
 
-    Fluxo interno:
-      1. Consulta a FIPE pela placa para obter marca, modelo, ano, valor FIPE, código FIPE e combustível.
-      2. Combina com os dados informados pelo cliente.
-      3. Envia tudo para a API de precificação do Grupo Saga.
+    PERGUNTE ao cliente APENAS: placa e km.
 
-    Peça ao cliente APENAS: placa, km, uf, cor, tipo (ex: HATCH/SEDAN/SUV).
-    versao, existe_zero_km e tipo_carroceria são opcionais — use "não" se não informados.
+    NÃO pergunte uf, cor nem existe_zero_km — preencha-os SOMENTE se o cliente
+    já tiver mencionado espontaneamente na conversa (ex: "meu carro é branco",
+    "sou de SP", "sei que tem versão 0km"). Caso contrário, deixe em branco.
+
+    Todos os dados técnicos (versão, carroceria, combustível, valor FIPE, etc.)
+    vêm automaticamente da FIPE pela placa — não pergunte nada disso.
+
+    RENDERIZAÇÃO DO RETORNO:
+      Se houver proposta (proposta_disponivel = true):
+        ## 💰 Proposta de Compra
+        **Veículo:** {veiculo_descricao}
+        **Valor oferecido: {preco_formatado}**
+        [🚗 Vender meu carro agora]({url_venda})
+
+      Se não houver proposta (proposta_disponivel = false):
+        Informe que o cliente deve trazer o veículo presencialmente para avaliação.
+        Exiba o botão: [🚗 Iniciar venda online]({url_venda})
+        Tom: direto e sem explicações longas.
     """
     placa_limpa = normalizar_placa(placa)
+    logger.info(f"[avaliar_veiculo] Chamada iniciada | placa={placa_limpa} | km={km} | uf={uf} | cor={cor} | existe_zero_km={existe_zero_km}")
 
-    # Passo 1: busca FIPE para preencher automaticamente os campos técnicos
-    fipe = await FipeService.consultar_por_placa(placa_limpa)
+    fipe = await _buscar_fipe(placa_limpa)
 
     if "error" in fipe:
+        logger.warning(f"[avaliar_veiculo] Falha FIPE | placa={placa_limpa} | detalhe={fipe}")
         return {
-            "error": "Não foi possível consultar a FIPE.",
-            "detalhe": fipe,
-            "mensagem": "Verifique a placa informada e tente novamente."
+            "error":    "Não foi possível consultar a FIPE.",
+            "detalhe":  fipe,
+            "mensagem": "Verifique a placa informada e tente novamente.",
         }
 
-    # Passo 2: monta o payload combinando dados da FIPE + dados do cliente
+    # Campos técnicos: todos vêm da FIPE
+    # Campos contextuais (uf, cor, existe_zero_km): do cliente se mencionou, senão padrão
     dados = {
-        "placa": placa_limpa,
-        "valor_fipe": str(fipe.get("valor_fipe") or 0),
-        "marca": fipe.get("marca") or "Não Informada",
-        "modelo": fipe.get("modelo") or "Não Informado",
-        "versao": versao or "não",
-        "tipo_combustivel": fipe.get("combustivel") or "Flex",
-        "ano_modelo": str(fipe.get("ano_modelo") or ""),
-        "codigo_fipe": fipe.get("codigo_fipe") or "",
-        "uf": uf,
-        "tipo": tipo,
-        "km": km,
-        "cor": cor,
-        "existe_zero_km": existe_zero_km or "não",
-        "tipo_carroceria": tipo_carroceria or "não",
+        "placa":            placa_limpa,
+        "km":               km,
+        "valor_fipe":       str(fipe.get("valor_fipe") or ""),
+        "marca":            fipe.get("marca")       or "",
+        "modelo":           fipe.get("modelo")      or "",
+        "versao":           fipe.get("versao")      or "",
+        "tipo_combustivel": fipe.get("combustivel") or "",
+        "ano_modelo":       str(fipe.get("ano_modelo") or ""),
+        "codigo_fipe":      fipe.get("codigo_fipe") or "",
+        "tipo_carroceria":  fipe.get("carroceria")  or "",
+        "tipo":             "carro",
+        "uf":               uf             or "GO",
+        "cor":              cor            or "não",
+        "existe_zero_km":   existe_zero_km or "não",
     }
 
-    logger.info(f"Avaliação iniciada | Placa: {placa_limpa} | FIPE: R${dados['valor_fipe']}")
+    logger.info(f"[avaliar_veiculo] Payload montado | placa={placa_limpa} | uf={dados['uf']} | cor={dados['cor']}")
 
-    # Passo 3: chama a API de precificação
-    return await PricingService.calcular_compra(dados)
+    logger.info(f"[avaliar_veiculo] Payload montado | placa={placa_limpa} | valor_fipe={dados['valor_fipe']}")
 
-@mcp.tool()
-async def contato_compra(
-    id_veiculo: Optional[str] = None,
-    marca: Optional[str] = None,
-    versao: Optional[str] = None,
-):
-    """
-    Gera o link direto para o cliente visualizar o veículo de interesse no site da Primeira Mão Saga (grade de ofertas).
+    resultado = await PricingService.calcular_compra(dados)
+    logger.info(f"[avaliar_veiculo] Retorno precificação | placa={placa_limpa} | resposta={resultado}")
 
-    Use esta ferramenta após identificar o veículo desejado pelo cliente via search_veiculos ou fetch_veiculo_detalhado.
-    Passe o 'id' do veículo (campo 'id' do estoque), a 'marca' (campo 'makeName') e a 'versao' (campo 'trimName').
+    if "error" in resultado:
+        logger.warning(f"[avaliar_veiculo] Erro precificação | placa={placa_limpa} | detalhe={resultado}")
+        return resultado
 
-    Se os dados forem suficientes, retorna a URL filtrada diretamente na página do veículo.
-    Caso contrário, retorna o link da grade de ofertas como fallback.
-    """
-    BASE_URL = "https://www.primeiramaosaga.com.br/gradedeofertas"
+    URL_VENDA = "https://www.primeiramaosaga.com.br/vender/avaliar-veiculo/cliente"
+    valor_proposta = resultado.get("Valor_proposta_compra") or resultado.get("valor_proposta_compra")
 
-    if id_veiculo and marca and versao:
-        slug = f"{marca}-{versao}".replace(" ", "-")
-        url = f"{BASE_URL}/{slug}/detalhes/{id_veiculo}"
+    try:
+        valor_numerico = float(
+            str(valor_proposta).replace(",", ".").replace("R$", "").strip()
+        ) if valor_proposta else 0
+    except (ValueError, TypeError):
+        valor_numerico = 0
+
+    veiculo_descricao = f"{fipe.get('marca', '')} {fipe.get('modelo', '')} {fipe.get('ano_modelo', '')}".strip()
+
+    if not valor_numerico:
+        logger.info(f"[avaliar_veiculo] Valor zerado | placa={placa_limpa} — orientando avaliação presencial")
         return {
-            "url": url,
+            "proposta_disponivel": False,
+            "veiculo_descricao":   veiculo_descricao,
+            "url_venda":           URL_VENDA,
             "mensagem": (
-                f"Ótimo! Encontrei o veículo para você. Acesse o link abaixo para ver todos os detalhes, "
-                f"fotos e entrar em contato com nossa equipe:\n\n{url}"
+                "Não foi possível gerar uma proposta automática. "
+                "Oriente o cliente a trazer o veículo presencialmente para avaliação."
             ),
-            "tipo": "url_filtrada",
         }
 
+    logger.info(f"[avaliar_veiculo] Proposta gerada | placa={placa_limpa} | valor={valor_proposta}")
     return {
-        "url": BASE_URL,
-        "mensagem": (
-            f"Acesse nossa grade completa de ofertas e encontre o veículo ideal para você:\n\n{BASE_URL}"
-        ),
-        "tipo": "url_base",
-    }
-
-
-@mcp.tool()
-async def contato_venda():
-    """
-    Retorna o link para o cliente dar continuidade à venda/avaliação do veículo no site da Primeira Mão Saga.
-
-    Use esta ferramenta APÓS concluir a avaliação com a tool 'avaliar_veiculo', para direcionar o cliente
-    à página de avaliação online onde ele pode finalizar o processo de venda.
-    """
-    URL_VENDA = "https://www.primeiramaosaga.com.br/vender/avaliar-veiculo/cliente"
-
-    return {
-        "url": URL_VENDA,
-        "mensagem": (
-            "Sua avaliação está pronta! Para dar continuidade e formalizar a venda do seu veículo, "
-            f"acesse o link abaixo e preencha seus dados:\n\n{URL_VENDA}"
-        ),
+        "proposta_disponivel":   True,
+        "veiculo_descricao":     veiculo_descricao,
+        "Valor_proposta_compra": valor_proposta,
+        "preco_formatado":       f"R$ {valor_proposta}",
+        "url_venda":             URL_VENDA,
     }
 
 
 if __name__ == "__main__":
-    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-    
+    os.chdir(_HERE)
+
     transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
-    
+
     if transport == "sse":
         port = int(os.getenv("PORT", 8000))
         logger.info(f"Iniciando MCP em modo SSE na porta {port}")

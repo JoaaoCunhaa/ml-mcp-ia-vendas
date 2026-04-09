@@ -1,32 +1,40 @@
-# 📖 Visão Geral: MCP Primeira Mão Saga
+# Visão Geral: MCP Primeira Mão Saga
 
-O projeto consiste em um servidor **Model Context Protocol (MCP)** especializado no ecossistema de veículos **seminovos** do programa **Primeira Mão** do **Grupo Saga**. Ele atua como uma ponte de dados em tempo real para que modelos de LLM (como ChatGPT e Claude) permitam que clientes finais e vendedores interajam com o inventário de seminovos via linguagem natural.
-
-## Sumário
-- [Objetivos](#objetivos)  
-- [Escopo](#escopo)  
-- [Público-Alvo](#público-alvo)
+Servidor **Model Context Protocol (MCP)** especializado no ecossistema de seminovos do programa **Primeira Mão** do **Grupo Saga**. Atua como ponte entre modelos de LLM (Claude, ChatGPT) e o estoque real das lojas, permitindo interação por linguagem natural.
 
 ---
 
 ## Objetivos
 
-O projeto **MCP Primeira Mão** tem como objetivo:
+1. **Interação natural com o estoque**: o cliente conversa com a IA para buscar veículos por qualquer critério — modelo, cor, ano, preço, placa, loja — sem precisar usar filtros de site.
+2. **Avaliação de troca em tempo real**: proposta automática de compra/troca com dados FIPE consultados pela placa, sem perguntas desnecessárias ao cliente.
+3. **Renderização visual rica**: cada veículo retornado inclui imagem, preço formatado e link para o livro de ofertas, para que o LLM monte cards visuais diretamente no chat.
 
-1. **Interação Natural com o Cliente**: Permitir que clientes finais busquem veículos seminovos através de **ChatGPT Apps**, conversando com a IA para filtrar modelos, preços e condições de forma consultiva.
-2. **Exposição Estratégica do Inventário**: Disponibilizar o estoque do selo "Primeira Mão" de forma dinâmica, superando a rigidez dos filtros de busca tradicionais de sites e portais.
-3. **Facilitação da Jornada de Compra**: Oferecer dados técnicos, fotos reais via integração Mobiauto e valores de Tabela FIPE instantaneamente para acelerar a decisão de compra.
+---
 
 ## Escopo
 
-- **Busca Semântica de Seminovos**: Implementação de ferramentas (`tools`) para listar, filtrar e pesquisar o estoque consolidado de todas as unidades seminovos do Grupo Saga.
-- **Dossiê do Veículo**: Recuperação de detalhes profundos (opcionais, quilometragem, histórico e fotos) para exibição rica dentro da interface do chat.
-- **Avaliação de Troca**: Motor de cálculo integrado à API de precificação para que o cliente receba uma estimativa de avaliação do seu veículo usado ao negociar um "Primeira Mão".
-- **Infraestrutura Híbrida**: Suporte a transporte via **stdio** (para uso em instâncias locais/inspetor) e **SSE** (para integração com aplicações web e Custom GPTs).
-- **Validação de Dados**: Normalização rigorosa de placas e valores monetários para garantir a integridade das informações apresentadas ao cliente.
+- **4 tools ativas**: `listar_lojas`, `estoque_total`, `buscar_veiculo`, `avaliar_veiculo`
+- **Busca em linguagem natural**: a tool `buscar_veiculo` interpreta qualquer consulta ("quero um corolla branco 2019") via extração de palavras-chave e busca em 4 fases progressivas
+- **Estoque paginado**: `estoque_total` busca 3 lojas por vez em paralelo, com avanço automático de página
+- **Avaliação automatizada**: `avaliar_veiculo` só pede placa e km — versão, carroceria, combustível e valor FIPE vêm automaticamente da API
+- **Resiliência**: FIPE com retry automático (3 tentativas, 60s de timeout cada); lojas e token Mobiauto cacheados em memória
+- **Fallback de lojas**: PostgreSQL Saga como fonte primária; CSV local (`lojas_mock.csv`) como fallback
+
+---
 
 ## Público-Alvo
 
-- **Clientes Finais**: Usuários que buscam uma experiência de compra moderna e personalizada através de assistentes de IA.
-- **Equipe de Vendas (SDRs/Consultores)**: Utilização do MCP como ferramenta de apoio rápido para identificar e enviar opções de veículos que dão "match" com o perfil do lead.
-- **Desenvolvedores e Inovação**: Equipe técnica focada em manter a conectividade entre os sistemas core da Saga (Mobiauto/Postgres) e as novas interfaces de inteligência artificial.
+| Perfil | Como usa |
+|---|---|
+| **Cliente final** | Busca veículos via ChatGPT App ou Claude em linguagem natural |
+| **Consultor de vendas** | Usa o MCP para encontrar rapidamente opções que batem com o perfil do lead |
+| **Equipe técnica** | Mantém a integração Mobiauto → FIPE → Pricing e evolui as tools |
+
+---
+
+## O que está fora do escopo
+
+- Finalização de venda ou financiamento (o MCP redireciona para o site Primeira Mão)
+- Histórico de negociações ou CRM
+- Gestão de estoque (somente leitura)

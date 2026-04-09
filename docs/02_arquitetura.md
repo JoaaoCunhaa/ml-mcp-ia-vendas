@@ -1,77 +1,123 @@
-# 🏗️ Arquitetura: MCP Primeira Mão Saga
-
-A arquitetura do projeto é baseada no protocolo **MCP (Model Context Protocol)**, utilizando uma abordagem de micro-serviços em Python para conectar modelos de linguagem a fontes de dados automotivas proprietárias.
-
-## Sumário
-- [Visão de Componentes](#visão-de-componentes)  
-- [Descrição dos Serviços](#descrição-dos-serviços)  
-- [Diagrama de Componentes](#diagrama-de-componentes)
+# Arquitetura: MCP Primeira Mão Saga
 
 ---
 
-## Visão de Componentes
+## Camadas
 
-A arquitetura distribui-se em camadas funcionais:
+| Camada | Componente | Responsabilidade |
+|---|---|---|
+| **Interface** | FastMCP (stdio / SSE) | Expõe as tools para LLMs e MCP Inspector |
+| **Tools** | `main.py` | Define as 4 tools, extração de palavras-chave, lógica de renderização |
+| **Serviços** | `InventoryAggregator` | Orquestra busca paralela por loja, paginação, cache de lojas e token |
+| **Serviços** | `FipeService` | Consulta FIPE pela placa com retry (3x, 60s timeout) |
+| **Serviços** | `PricingService` | Envia payload para API de precificação Saga e retorna proposta |
+| **Dados** | `MobiautoService` | Consulta estoque da API Mobiauto por dealer ID (sem paginação) |
+| **Dados** | `postgres_client` | Retorna lista de lojas do PostgreSQL ou CSV fallback |
+| **Utilitários** | `helpers.py` | Normalização de placa, formatação de moeda, extração de lista de veículos |
 
-1. **Protocolo (Interface)**: FastMCP atuando como servidor de comunicação via stdio/SSE.
-2. **Serviços (Lógica)**: Camada de agregação de estoque, consulta FIPE e motores de precificação.
-3. **Integração (APIs)**: Conectores assíncronos para API externa (**MobiGestor**) e APIs internas (**Saga**).
-4. **Persistência**: Banco de Dados PostgreSQL da Saga para gestão de unidades e configurações.
-5. **Fallback**: Camada de resiliência baseada em arquivos CSV para garantir operabilidade offline.
+---
 
-## Descrição dos Serviços
+## Serviços externos
 
-- **FastMCP (Python)**: Framework core que expõe as `tools` (ferramentas) para o ChatGPT/Inspector.
-- **Inventory Aggregator**: Serviço central que consolida o estoque de veículos seminovos.
-- **Saga Fipe Service**: API interna do Grupo Saga para busca de dados técnicos e valores de referência via placa.
-- **Saga Pricing Service**: Motor de precificação proprietário que calcula propostas de compra/troca.
-- **PostgreSQL (Saga)**: Repositório oficial de mapeamento das lojas, unidades e credenciais.
-- **MobiGestor API (Mobiauto)**: Única fonte externa, utilizada para busca de estoque bruto, fotos e opcionais.
-- **Inspector/ChatGPT App**: Interfaces de consumo final que interagem com o servidor MCP.
+| API | Endpoint base | Uso |
+|---|---|---|
+| **Mobiauto** | `open-api.mobiauto.com.br` | Estoque por dealer — retorna todos os veículos sem paginação |
+| **FIPE Saga** | `api-precificacao.sagadatadriven.com.br/fipe` | Dados técnicos e valor FIPE pela placa |
+| **Pricing Saga** | `api-precificacao.sagadatadriven.com.br/carro/compra` | Proposta de compra/troca |
+| **Token AWS** | Configurado via `URL_AWS_TOKEN` + `MOBI_SECRET` | Bearer token para autenticar na Mobiauto |
 
-## Diagrama de Componentes
+---
+
+## Cache em memória
+
+| Cache | Onde | O que guarda |
+|---|---|---|
+| `_token_cache` | `MobiautoService` | Bearer token Mobiauto — renovado automaticamente no 401 |
+| `_lojas_cache` | `InventoryAggregator` | Lista de lojas + fonte (`banco` ou `mock`) — carregado uma vez por sessão |
+
+---
+
+## Configurações relevantes (`config.py` / `.env`)
+
+| Variável | Padrão | Descrição |
+|---|---|---|
+| `API_TIMEOUT` | 30s | Timeout geral (Mobiauto, Pricing) |
+| `FIPE_TIMEOUT` | 60s | Timeout exclusivo da API FIPE (mais lenta) |
+| `MCP_TRANSPORT` | `stdio` | `stdio` para Inspector/local, `sse` para produção |
+| `PORT` | 8000 | Porta SSE em produção |
+| `MOBI_SECRET` | — | Segredo para obter token Mobiauto |
+| `URL_AWS_TOKEN` | — | Endpoint do token Mobiauto |
+| `PRECIFICACAO_API_URL` | — | Base URL das APIs FIPE e Pricing |
+
+---
+
+## Diagrama de componentes
 
 ```mermaid
 flowchart TB
-    subgraph Cliente_Interface
-        LLM["ChatGPT / Claude (Apps)"]
+    subgraph Interface
+        LLM["Claude / ChatGPT App"]
         INSP["MCP Inspector"]
     end
 
-    subgraph Servidor_MCP_Python
-        FAST["FastMCP Server"]
-        LOGIC["Logic: Inventory Aggregator"]
-        PRIC["Logic: Saga Pricing"]
-        FIPE["Logic: Saga Fipe"]
+    subgraph MCP_Server["Servidor MCP (Python / FastMCP)"]
+        MAIN["main.py\n4 tools + helpers de busca"]
+        AGG["InventoryAggregator\ncache lojas · paginação · gather"]
+        FIPE_S["FipeService\nretry 3x · timeout 60s"]
+        PRICE_S["PricingService\ntimeout 30s"]
+        MOBI_S["MobiautoService\ncache token · auto-refresh 401"]
+        DB["postgres_client\nPostgreSQL → CSV fallback"]
     end
 
-    subgraph Infraestrutura_Saga
-        DB[("PostgreSQL: Lojas & Unidades")]
-        CSV["CSV Fallback"]
-        API_P["API Saga: Precificação"]
-        API_F["API Saga: Fipe"]
+    subgraph APIs_Externas["APIs Externas"]
+        MOBI_API["API Mobiauto\n(estoque por dealer)"]
+        FIPE_API["API FIPE Saga"]
+        PRICE_API["API Pricing Saga"]
+        TOKEN_API["AWS Token\n(Mobiauto auth)"]
     end
 
-    subgraph Integracao_Externa
-        API_M["API MobiGestor (Estoque)"]
+    subgraph Dados_Locais
+        PG[("PostgreSQL\nlojas_ids_mobigestor")]
+        CSV["lojas_mock.csv\n(fallback)"]
     end
 
-    %% Fluxo de Comunicação
-    LLM <-->|SSE / stdio| FAST
-    INSP <-->|stdio| FAST
+    LLM <-->|SSE ou stdio| MAIN
+    INSP <-->|stdio| MAIN
 
-    FAST --> LOGIC
-    FAST --> PRIC
-    FAST --> FIPE
+    MAIN --> AGG
+    MAIN --> FIPE_S
+    MAIN --> PRICE_S
 
-    %% Relacionamentos de Dados
-    LOGIC --> DB
-    LOGIC --> CSV
-    LOGIC --> API_M
-    
-    PRIC --> API_P
-    FIPE --> API_F
-    
-    API_M -.->|Dados Brutos| LOGIC
+    AGG --> MOBI_S
+    AGG --> DB
 
+    MOBI_S --> TOKEN_API
+    MOBI_S --> MOBI_API
+
+    FIPE_S --> FIPE_API
+    PRICE_S --> PRICE_API
+
+    DB --> PG
+    DB --> CSV
+```
+
+---
+
+## Estrutura de arquivos
+
+```
+src/python/mcp_primeira_mao/
+├── main.py                     # Tools MCP + helpers de busca e renderização
+├── config.py                   # Variáveis de ambiente e logger
+├── .env                        # Secrets (não versionado)
+├── services/
+│   ├── inventory_aggregator.py # Orquestração de estoque e paginação
+│   ├── mobiauto_service.py     # Cliente Mobiauto (token + estoque)
+│   ├── fipe_service.py         # Cliente FIPE com retry
+│   └── pricing_service.py      # Cliente API de precificação
+├── database/
+│   ├── postgres_client.py      # Consulta lojas (banco ou CSV)
+│   └── lojas_mock.csv          # Dados mock das lojas
+└── utils/
+    └── helpers.py              # normalizar_placa, formatar_moeda, extrair_lista_veiculos
 ```

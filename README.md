@@ -1,6 +1,16 @@
-# Template de Projeto
+# ml-mcp-ia-vendas — MCP Primeira Mão Saga
 
-Este repositório é um esqueleto para projetos de dados.
+Repositório do servidor **Model Context Protocol (MCP)** do programa **Primeira Mão** do Grupo Saga. Integra modelos de linguagem (Claude, ChatGPT) ao estoque de seminovos em tempo real, com criação automática de leads no CRM Mobiauto e notificação de consultores via n8n.
+
+**Responsável:** João Cunha — `joao.clara@gruposaga.com.br`
+
+## Módulo principal
+
+```
+src/python/mcp_primeira_mao/   ← Servidor MCP (FastMCP / Python 3.13)
+```
+
+Documentação técnica completa: [docs/index.md](docs/index.md)
 
 ## Estrutura
 

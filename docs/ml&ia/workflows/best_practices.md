@@ -1,27 +1,43 @@
-# Boas Práticas de Desenvolvimento
+# Boas Práticas — MCP Primeira Mão Saga
 
-Para manter a consistência, manutenibilidade e escalabilidade dos nossos workflows, seguimos as seguintes boas práticas:
+## 1. Tools MCP
 
-## 1. Nomenclatura
+- **Nunca expor funções internas como tools.** Funções de lead (`_criar_lead_compra`, `_criar_lead_venda`) são internas e não devem ser decoradas com `@mcp.tool`. O LLM re-chama a mesma tool com os parâmetros de lead — não chama uma tool separada.
+- **Parâmetros de lead são opcionais.** Tools como `buscar_veiculo` e `estoque_total` funcionam normalmente sem eles — a criação de lead é acionada apenas quando `nome_cliente` + `telefone_cliente` estão presentes.
+- **docstrings são instruções para o LLM.** Mantenha-as claras, curtas e orientadas ao comportamento esperado (quando chamar, o que passar, o que exibir).
 
-- **Workflows:** Use nomes claros e objetivos no formato `[PROJETO]_[AÇÃO]_[ENTIDADE]`. Ex: `CARTEIRA_VENDEDOR_PROCESSA_LEADS`.
-- **Nós (Nodes):** Renomeie todos os nós com uma descrição da sua função. Em vez de "HTTP Request", use "Busca Dados de Clientes na API".
+## 2. Renderização de conteúdo
 
-## 2. Modularização
+- **Pré-renderize Markdown no servidor.** Cards de veículos e propostas de avaliação devem ser gerados em Python e entregues prontos nos campos `cards_markdown` e `proposta_markdown`. O LLM não deve montar templates ou inferir formatação.
+- **Nunca exiba o bloco `_meta`.** Esse campo é para uso interno (logging, debug) e não deve aparecer na resposta ao cliente.
+- **Fallback sempre presente.** Toda tool retorna uma mensagem útil mesmo quando o resultado é vazio (estoque indisponível, veículo não encontrado, lead com falha).
 
-- Workflows complexos devem ser quebrados em workflows menores e reutilizáveis, utilizando o nó `Execute Workflow`.
-- Um workflow não deve ter mais do que `[20-30]` nós (a definir pela equipe).
+## 3. APIs e resiliência
 
-## 3. Gerenciamento de Erros
+- **Timeouts configurados por serviço:**
+  - FIPE: 60s por tentativa, 3 retries, 2s entre tentativas
+  - Mobiauto estoque e CRM: 30s e 15s respectivamente
+  - Webhook n8n: 10s
+- **Token Mobiauto:** Cacheado em memória; renovado automaticamente no 401. Nunca hard-code token no código.
+- **Lista de lojas:** Cacheada por sessão. Para forçar recarga, reiniciar o servidor.
+- **Webhook não bloqueia lead.** Falha no POST do webhook é logada como warning, mas não impede o retorno do lead ao LLM.
 
-- Utilize o nó `Error Trigger` para criar rotinas de tratamento de falhas.
-- Sempre inclua um passo final para notificar sobre o erro (ex: via Slack) com informações contextuais (nome do workflow, passo do erro, dados de entrada).
+## 4. Logs
 
-## 4. Credenciais
+- Formato: `[NomeServico.metodo]` no início de cada linha de log
+- Logs de início e conclusão em toda operação relevante (`Iniciando`, `Concluído`)
+- Campos obrigatórios no log de lead: `success`, `dealer_id`, `cliente`, `tel`
+- Erros logados com `logger.error` / `logger.exception`; avisos com `logger.warning`
 
-- **Nunca** use credenciais diretamente nos nós (`hardcode`).
-- Sempre utilize o sistema de credenciais nativo do n8n.
+## 5. Testes
 
-## 5. Documentação Interna
+- **`test_tools.py`**: suite completa — executa todas as tools, funções internas e webhooks
+- **`test_lead.py`**: testes focados na API Mobiauto CRM e webhooks n8n
+- Rode os testes após qualquer alteração nas tools ou nos serviços de lead
+- Testes de lead **criam registros reais** no CRM Mobiauto — use dados claramente identificados como teste (ex: `"Teste Automatico T01"`, email `@sagadatadriven.com.br`)
 
-- Utilize o nó `Sticky Note` para adicionar comentários e explicações importantes diretamente no canvas do workflow.
+## 6. Segredos e variáveis de ambiente
+
+- Todos os segredos em `.env` (não versionado)
+- Variáveis obrigatórias: `MOBI_SECRET`, `URL_AWS_TOKEN`, `PRECIFICACAO_API_URL`, `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
+- Variáveis opcionais: `MCP_TRANSPORT` (padrão: `stdio`), `PORT` (padrão: 8000), `API_TIMEOUT` (padrão: 30), `FIPE_TIMEOUT` (padrão: 60)

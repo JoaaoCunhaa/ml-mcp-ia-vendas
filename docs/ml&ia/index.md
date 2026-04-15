@@ -1,47 +1,36 @@
-# 🤖 Introdução a ML & IA
+# MCP IA de Vendas — Primeira Mão Saga
 
 ## Visão Geral do Projeto
 
-Descreva aqui o propósito geral da solução de Machine Learning ou IA neste projeto. Qual problema de negócio estamos resolvendo? Quais são os principais objetivos e os resultados esperados?
+O **MCP Primeira Mão Saga** é um servidor **Model Context Protocol (MCP)** que integra modelos de linguagem (Claude, ChatGPT) ao ecossistema de seminovos do Grupo Saga. A solução resolve dois problemas de negócio centrais:
 
-**Exemplo:**
-*O objetivo deste projeto é desenvolver um modelo de recomendação para a "Carteira do Vendedor", visando aumentar o cross-sell de produtos em 15% até o final do Q4.*
+1. **Busca de estoque em linguagem natural** — o cliente não precisa usar filtros; conversa com a IA e recebe cards visuais com imagem, preço e link direto para o livro de ofertas.
+2. **Qualificação e registro automático de leads** — quando o cliente confirma interesse (compra ou venda), o lead é registrado direto no CRM Mobiauto e o consultor responsável é notificado pelo n8n, tudo dentro da mesma chamada de ferramenta.
 
 ## Stakeholders
 
-Liste as principais partes interessadas no projeto e seus papéis.
-
 | Nome | Área | Papel no Projeto |
-| :--- | :--- | :--- |
-| [Nome do Stakeholder] | [Ex: Vendas, Marketing] | [Ex: Product Owner, Sponsor] |
-| [Nome do Stakeholder] | [Ex: Dados] | [Ex: Tech Lead] |
+|---|---|---|
+| João Cunha | Data & IA | Tech Lead / Desenvolvedor |
+| Equipe Primeira Mão | Vendas Seminovos | Product Owner / Usuário final |
+| Consultores Saga | Vendas | Receptores dos leads gerados |
 
 ## Tecnologias Utilizadas
 
-Liste as principais tecnologias, frameworks e bibliotecas usadas nesta solução.
-
-- **Orquestração:** [Ex: n8n, Airflow]
-- **Linguagem:** [Ex: Python 3.9]
-- **Principais Bibliotecas:** [Ex: Scikit-learn, Pandas, TensorFlow]
-- **Plataforma:** [Ex: AWS SageMaker, Databricks]
-
+- **Protocolo:** Model Context Protocol (MCP) via FastMCP
+- **Linguagem:** Python 3.13
+- **HTTP:** httpx (async) + asyncio.gather para chamadas paralelas
+- **Transporte:** stdio (local / MCP Inspector) e SSE (produção / Docker)
+- **Automação:** n8n (webhooks de notificação interna)
+- **CRM:** Mobiauto Open API
+- **Pricing:** API interna Saga (FIPE + proposta de compra)
+- **Banco de dados:** PostgreSQL Saga + CSV fallback
 
 ## Acesso ao Ambiente
 
-Forneça as informações de acesso aos ambientes do n8n.
-
-- **Ambiente de Desenvolvimento:** `https://doit.software/hire-n8n-developer`
-- **Ambiente de Produção:** `https://www.reddit.com/r/n8n/comments/1j2efiw/thoughts_on_using_n8n_for_production/`
+- **Servidor MCP (SSE):** Porta 8000, configurado via `MCP_TRANSPORT=sse` e `PORT=8000`
+- **MCP Inspector (local):** `npx @modelcontextprotocol/inspector python main.py`
+- **Variáveis de ambiente:** `.env` na raiz do módulo (não versionado)
 
 !!! warning "Credenciais"
-    As credenciais de acesso devem ser gerenciadas através do [Nome da Ferramenta de Segredos, ex: AWS Secrets Manager] e nunca devem ser expostas diretamente nos workflows.
-
-# Referência n8n
-
-Este diretório contém links e referências para a documentação do n8n utilizada no projeto.
-
-- [Documentação oficial do n8n](https://docs.n8n.io/)
-- Guias internos e exemplos de uso
-- Convenções adotadas no projeto
-
-Utilize este espaço para centralizar informações úteis sobre automações n8n.
+    Todos os segredos (token Mobiauto, senha do banco, URL de precificação) são carregados via `.env` e nunca devem ser expostos no código ou versionados.

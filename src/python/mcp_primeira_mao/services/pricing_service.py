@@ -44,8 +44,10 @@ class PricingService:
                         "detalhe": resp.text[:300],
                     }
 
-                logger.info(f"[PricingService] Sucesso | placa={params['placa']} | resposta={resp.text[:200]}")
-                return resp.json()
+                data = resp.json()
+                valor = data.get("Valor_proposta_compra") or data.get("valor_proposta_compra") or "0"
+                logger.info(f"[PricingService] Sucesso | placa={params['placa']} | Valor_proposta_compra={valor} | status={resp.status_code}")
+                return data
 
         except httpx.ReadTimeout:
             logger.error(f"[PricingService] ReadTimeout | placa={params['placa']}")

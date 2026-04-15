@@ -184,6 +184,7 @@ class InventoryAggregator:
         """Busca estoque de todas as lojas. Usado pelo search_veiculos."""
         lojas = await InventoryAggregator.obter_lista_lojas()
         if not lojas:
+            logger.warning("[buscar_estoque_consolidado] Sem lojas — abortando")
             return []
 
         token = await MobiautoService.get_token()
@@ -192,11 +193,13 @@ class InventoryAggregator:
             return []
 
         page_size = max(5, (limit // len(lojas)) + 1) if limit else 20
+        logger.info(f"[buscar_estoque_consolidado] Iniciando busca em {len(lojas)} lojas em paralelo | limit={limit} | page_size={page_size}")
 
         tarefas = [MobiautoService.buscar_estoque(l["codigo_svm"], token=token, page_size=page_size) for l in lojas]
         resultados = await asyncio.gather(*tarefas, return_exceptions=True)
 
         estoque_global = []
+        erros = 0
         for i, veiculos in enumerate(resultados):
             nome_loja = lojas[i]["nome"]
             if isinstance(veiculos, list):
@@ -206,7 +209,10 @@ class InventoryAggregator:
                         logger.info(f"[buscar_estoque_consolidado] Limite de {limit} atingido")
                         return estoque_global
             else:
+                erros += 1
                 logger.error(f"[buscar_estoque_consolidado] Erro na loja {nome_loja}: {veiculos}")
+
+        logger.info(f"[buscar_estoque_consolidado] Concluído | total_veículos={len(estoque_global)} | lojas_ok={len(lojas) - erros} | lojas_erro={erros}")
         return estoque_global
 
     @staticmethod

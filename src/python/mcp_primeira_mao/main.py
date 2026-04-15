@@ -436,18 +436,20 @@ async def estoque_total(
     """
     Exibe até 25 veículos disponíveis nas lojas Primeira Mão Saga da cidade informada.
 
-    ANTES de chamar esta ferramenta: pergunte ao cliente em qual **cidade** ele busca
-    o veículo e passe a resposta no campo `cidade`. Aceita também UF (ex: "GO", "SP").
+    ANTES de chamar: se o cliente não informou a cidade, NÃO chame esta ferramenta.
+    Pergunte primeiro: "Em qual cidade você procura o veículo?"
+    Só chame com o campo `cidade` preenchido. Aceita também UF (ex: "GO", "SP").
 
-    OUTPUT: exiba o campo `cards_markdown` diretamente ao usuário — já formatado com
-    imagem, specs, preço e as duas opções de ação ao final (consultor OU site).
-    NÃO exiba nenhum campo do bloco `_meta`. NÃO adicione texto depois dos cards.
+    EXIBIÇÃO OBRIGATÓRIA: sua única saída ao cliente deve ser o valor exato do campo
+    `cards_markdown`, copiado palavra por palavra. NÃO resuma, NÃO categorize,
+    NÃO reformate e NÃO adicione texto próprio. Ignore todos os outros campos.
 
     LEAD DE COMPRA AUTOMÁTICO:
-      O cards_markdown já inclui a pergunta ao cliente.
-      Quando o cliente responder que quer falar com consultor e informar nome + telefone,
-      chame esta ferramenta novamente passando nome_cliente + telefone_cliente +
-      dados do veículo escolhido (titulo_card, loja_unidade, plate, etc.).
+      O cards_markdown já inclui as duas opções ao cliente.
+      Se o cliente escolher a opção 1️⃣ sem informar nome e telefone, pergunte:
+      "Pode me informar seu nome completo e telefone com DDD?"
+      Só re-chame a ferramenta quando tiver ambos.
+      Passe nome_cliente + telefone_cliente + dados do veículo (titulo_card, loja_unidade, plate, etc.).
       O lead é criado internamente — não existe outra ferramenta para isso.
     """
     # ── Lead automático: criação interna quando cliente confirma interesse ──
@@ -514,9 +516,9 @@ async def estoque_total(
             "cidade":         cidade,
             "lojas_buscadas": nomes_lojas,
             "fonte_lojas":    fonte,
+            "veiculos":       veiculos,
             "nota":           "Bloco interno — NÃO exibir ao cliente.",
         },
-        "veiculos": veiculos,
     }
 
 
@@ -545,9 +547,8 @@ async def buscar_veiculo(
     Exemplos: "quero um corolla branco 2019", "hb20 prata", "abc1234", "SUV abaixo de 80 mil",
               "quero comprar uma xre 2024", "toyota abaixo de 150 mil".
 
-    ANTES de chamar: se o cliente não informou a cidade, pergunte em qual **cidade** ele
-    busca o veículo e passe no campo `cidade`. Aceita também UF (ex: "GO", "SP").
-    Se a mensagem já contiver cidade/UF, extraia e passe diretamente.
+    ANTES de chamar: se a mensagem já contém cidade ou UF, extraia e passe em `cidade`.
+    Se não contém, pergunte: "Em qual cidade você busca esse veículo?" antes de chamar.
 
     Estratégia em 4 fases — NUNCA retorna vazio:
       1. ID ou placa exata → busca direta em todas as lojas.
@@ -557,15 +558,16 @@ async def buscar_veiculo(
 
     Retorna no máximo 25 veículos com imagem.
 
-    OUTPUT: exiba o campo `cards_markdown` diretamente ao usuário — já formatado com
-    imagem, specs técnicos, preço e as duas opções de ação ao final (consultor OU site).
-    NÃO adicione texto depois dos cards — o cards_markdown já inclui a pergunta ao cliente.
+    EXIBIÇÃO OBRIGATÓRIA: sua única saída ao cliente deve ser o valor exato do campo
+    `cards_markdown`, copiado palavra por palavra. NÃO resuma, NÃO categorize,
+    NÃO reformate e NÃO adicione texto próprio. Ignore todos os outros campos.
 
     LEAD DE COMPRA AUTOMÁTICO:
-      O cards_markdown já pergunta ao cliente o que ele quer fazer.
-      Quando o cliente responder que quer falar com consultor e informar nome + telefone,
-      chame esta ferramenta novamente passando nome_cliente + telefone_cliente +
-      dados do veículo escolhido (titulo_card, loja_unidade, plate, preco_formatado, etc.).
+      O cards_markdown já inclui as duas opções ao cliente.
+      Se o cliente escolher a opção 1️⃣ sem informar nome e telefone, pergunte:
+      "Pode me informar seu nome completo e telefone com DDD?"
+      Só re-chame a ferramenta quando tiver ambos.
+      Passe nome_cliente + telefone_cliente + dados do veículo (titulo_card, loja_unidade, plate, preco_formatado, etc.).
       O lead é criado internamente — não existe outra ferramenta para isso.
     """
     # ── Lead automático: criação interna quando cliente confirma interesse ──
@@ -599,8 +601,7 @@ async def buscar_veiculo(
             logger.info(f"[buscar_veiculo] Fase 1 — encontrado por ID/placa")
             return {
                 "cards_markdown": _renderizar_cards([resultado_exato], mostrar_placa=True),
-                "total":    1,
-                "veiculos": [resultado_exato],
+                "_meta": {"total": 1, "veiculos": [resultado_exato], "nota": "Bloco interno — NÃO exibir ao cliente."},
             }
 
     # ── Carrega estoque: filtrado por cidade quando informada ──
@@ -631,8 +632,7 @@ async def buscar_veiculo(
         veiculos_and = [v for v in res_and if v.get("url_imagem")][:25]
         return {
             "cards_markdown": _renderizar_cards(veiculos_and, mostrar_placa=True),
-            "total":    len(veiculos_and),
-            "veiculos": veiculos_and,
+            "_meta": {"total": len(veiculos_and), "veiculos": veiculos_and, "nota": "Bloco interno — NÃO exibir ao cliente."},
         }
 
     # ── Fase 3: OR com ranking — ordena por quantos termos batem ──
@@ -650,8 +650,7 @@ async def buscar_veiculo(
         msg_or = f"Não encontramos exatamente \"{consulta}\", mas veja as opções mais próximas:"
         return {
             "cards_markdown": _renderizar_cards(res_or, mensagem=msg_or, mostrar_placa=True),
-            "total":    len(res_or),
-            "veiculos": res_or,
+            "_meta": {"total": len(res_or), "veiculos": res_or, "nota": "Bloco interno — NÃO exibir ao cliente."},
         }
 
     # ── Fase 4: Sem nenhuma correspondência — retorna sugestões gerais ──
@@ -669,8 +668,7 @@ async def buscar_veiculo(
 
     return {
         "cards_markdown": cards_md_f4,
-        "total":    len(sugestoes),
-        "veiculos": sugestoes,
+        "_meta": {"total": len(sugestoes), "veiculos": sugestoes, "nota": "Bloco interno — NÃO exibir ao cliente."},
     }
 
 

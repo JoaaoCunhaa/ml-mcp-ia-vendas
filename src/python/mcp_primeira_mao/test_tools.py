@@ -150,7 +150,7 @@ async def test_buscar_veiculo_normal():
     print(f"  markdown : {r.get('cards_markdown', '')[:120]}...")
 
     checar("cards_markdown presente",  bool(r.get("cards_markdown")))
-    checar("campo total presente",     "total" in r)
+    checar("_meta presente",           bool(r.get("_meta")))
     checar("nao tem campo 'lead'",     "lead" not in r)
     return r
 

@@ -8,6 +8,7 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 import re
+import unicodedata
 import httpx
 from typing import Optional
 from fastmcp import FastMCP
@@ -77,6 +78,22 @@ async def _openai_domain_challenge(request: Request) -> PlainTextResponse:
 # HELPERS DE BUSCA — extração de palavras-chave em linguagem natural
 # ─────────────────────────────────────────────────────────────
 
+def _norm(s: str) -> str:
+    """Normaliza texto para comparação: remove acentos, lowercase, strip."""
+    return unicodedata.normalize("NFD", s or "").encode("ascii", "ignore").decode().lower().strip()
+
+
+def _filtrar_lojas_por_cidade(lojas: list, cidade: str) -> list:
+    """Retorna lojas cujo nome, cidade ou UF contenham o termo informado (sem acento, case-insensitive)."""
+    termo = _norm(cidade)
+    return [
+        l for l in lojas
+        if termo in _norm(l.get("cidade") or "")
+        or termo in _norm(l.get("uf") or "")
+        or termo in _norm(l.get("nome") or "")
+    ]
+
+
 _STOPWORDS = {
     "quero", "um", "uma", "me", "mostra", "mostrar", "preciso", "de", "para",
     "com", "que", "o", "a", "os", "as", "tem", "ter", "ver", "buscar",
@@ -135,39 +152,75 @@ def _fmt_km(km) -> str:
 
 
 def _renderizar_card(v: dict, mostrar_placa: bool = False) -> str:
-    """Gera o bloco Markdown completo de um card de veículo."""
-    url_img = v.get("url_imagem") or ""
-    titulo  = v.get("titulo_card") or "Veículo"
-    loja    = v.get("loja_unidade") or ""
-    ano     = str(v.get("modelYear") or "")
-    cor     = v.get("colorName") or ""
-    placa   = v.get("plate") or ""
-    preco   = v.get("preco_formatado") or "R$ --"
-    link    = v.get("link_ofertas") or "https://www.primeiramaosaga.com.br/gradedeofertas"
-    km_fmt  = _fmt_km(v.get("km"))
+    """Gera o bloco Markdown de um card no estilo Localiza — imagem + specs + preço."""
+    url_img     = v.get("url_imagem") or ""
+    marca       = v.get("makeName") or ""
+    modelo      = v.get("modelName") or ""
+    versao      = v.get("trimName") or ""
+    ano         = str(v.get("modelYear") or "")
+    cor         = v.get("colorName") or ""
+    placa       = v.get("plate") or ""
+    loja        = v.get("loja_unidade") or ""
+    preco       = v.get("preco_formatado") or "R$ --"
+    link        = v.get("link_ofertas") or "https://www.primeiramaosaga.com.br/gradedeofertas"
+    km_fmt      = _fmt_km(v.get("km"))
+    carroceria  = v.get("carroceria") or ""
+    transmissao = v.get("transmissao") or ""
+    combustivel = v.get("combustivel") or ""
+    portas      = v.get("portas") or ""
+    opcionais   = v.get("opcionais") or []
+
+    # ── Linha de categoria (ex: "Sedan · Automática · Flex · 4 portas") ──
+    specs = [p for p in [carroceria, transmissao, combustivel,
+                         f"{portas} portas" if portas else ""] if p]
+    specs_str = " · ".join(specs) if specs else ""
+
+    # ── Linha de detalhes (loja, km, cor, placa) ──
+    detalhes = []
+    if loja:
+        detalhes.append(f"🏪 **{loja}**")
+    if km_fmt:
+        detalhes.append(f"📏 {km_fmt} km")
+    if cor:
+        detalhes.append(f"🎨 {cor}")
+    if placa and mostrar_placa:
+        detalhes.append(f"🔖 {placa}")
+    detalhes_str = " · ".join(detalhes) if detalhes else ""
+
+    # ── Opcionais destacados ──
+    opcionais_str = " · ".join(opcionais[:4]) if opcionais else ""
 
     linhas = []
     if url_img:
-        linhas.append(f"![{titulo}]({url_img})")
-    linhas.append(f"### **{titulo}**")
-    linhas.append("| | |")
-    linhas.append("|---|---|")
-    if loja:
-        linhas.append(f"| 📍 Loja | {loja} |")
-    if ano:
-        linhas.append(f"| 🗓️ Ano | {ano} |")
-    if km_fmt:
-        linhas.append(f"| 📏 KM | {km_fmt} km |")
-    if cor:
-        linhas.append(f"| 🎨 Cor | {cor} |")
-    if placa and mostrar_placa:
-        linhas.append(f"| 🔖 Placa | {placa} |")
+        linhas.append(f"![{marca} {modelo} {ano}]({url_img})")
+    linhas.append(f"### {marca} {modelo} {ano}")
+    if versao:
+        linhas.append(f"*{versao}*")
+    if specs_str:
+        linhas.append(f"**{specs_str}**")
     linhas.append("")
-    linhas.append(f"## 💰 {preco}")
-    linhas.append(f"[🛒 Ver oferta no site]({link})")
+    if detalhes_str:
+        linhas.append(detalhes_str)
+    if opcionais_str:
+        linhas.append(f"✅ {opcionais_str}")
+    linhas.append("")
+    linhas.append(f"### 💰 {preco}")
+    linhas.append(f"[🌐 Ver oferta no site]({link})")
     linhas.append("")
     linhas.append("---")
     return "\n".join(linhas)
+
+
+# CTA embutido no final de qualquer lista de cards — garante que o cliente sempre veja as opções
+_CTA_OPCOES = (
+    "\n"
+    "**Gostou de algum veículo?** Escolha o que prefere fazer:\n\n"
+    "**1️⃣ Falar com um consultor Saga** — me informe seu **nome** e **telefone** "
+    "que registro seu interesse e um consultor entra em contato\n\n"
+    "**2️⃣ Ver no site** — "
+    "[acesse o Livro de Ofertas Primeira Mão](https://www.primeiramaosaga.com.br/gradedeofertas) "
+    "para fotos completas, ficha técnica e simulação de financiamento"
+)
 
 
 def _renderizar_cards(
@@ -176,7 +229,7 @@ def _renderizar_cards(
     aviso: str = None,
     mostrar_placa: bool = False,
 ) -> str:
-    """Gera Markdown de uma lista de cards, com mensagem e aviso opcionais."""
+    """Gera Markdown de uma lista de cards com CTA embutido ao final."""
     partes = []
     if mensagem:
         partes.append(f"> {mensagem}\n")
@@ -184,18 +237,9 @@ def _renderizar_cards(
         partes.append(_renderizar_card(v, mostrar_placa=mostrar_placa))
     if aviso:
         partes.append(f"\n*{aviso}*")
+    if veiculos:
+        partes.append(_CTA_OPCOES)
     return "\n".join(partes)
-
-
-# Instrução de interação pós-card (comportamento conversacional — não pré-renderizável)
-_INSTRUCAO_OPCOES_COMPRA = (
-    "AÇÃO PÓS-CARDS — quando o cliente demonstrar interesse em comprar um veículo específico "
-    "('quero esse', 'como compro?', 'pode reservar?', etc.), ofereça OBRIGATORIAMENTE as duas opções:\n"
-    "  1️⃣ [🛒 Ver oferta no site](https://www.primeiramaosaga.com.br/gradedeofertas)\n"
-    "  2️⃣ Falar com consultor — peça nome e telefone e chame criar_lead_compra.\n"
-    "Após criar_lead_compra retornar com sucesso, diga: "
-    "'Um consultor Saga entrará em contato em breve sobre o veículo escolhido.'"
-)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -372,7 +416,7 @@ async def listar_lojas():
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True, destructiveHint=False))
 async def estoque_total(
-    pagina: Optional[int] = 1,
+    cidade: Optional[str] = None,
     # ── Lead automático de compra ──────────────────────────────
     # Preencha estes campos quando o cliente confirmar que quer falar com consultor.
     # O lead é criado internamente — NÃO chame nenhuma outra ferramenta para isso.
@@ -390,20 +434,21 @@ async def estoque_total(
     observacao: Optional[str] = None,
 ):
     """
-    Exibe o estoque de veículos disponíveis nas lojas Primeira Mão Saga, 3 lojas por vez.
+    Exibe até 25 veículos disponíveis nas lojas Primeira Mão Saga da cidade informada.
 
-    - pagina=1 (padrão): primeiras 3 lojas.
-    - pagina=2, 3…: próximas lojas — use quando o usuário pedir "ver mais".
+    ANTES de chamar esta ferramenta: pergunte ao cliente em qual **cidade** ele busca
+    o veículo e passe a resposta no campo `cidade`. Aceita também UF (ex: "GO", "SP").
 
-    OUTPUT: exiba o campo `cards_markdown` diretamente ao usuário — os cards já estão
-    formatados com imagem, tabela de detalhes, preço e botão de oferta.
-    NÃO exiba nenhum campo do bloco `_meta`.
+    OUTPUT: exiba o campo `cards_markdown` diretamente ao usuário — já formatado com
+    imagem, specs, preço e as duas opções de ação ao final (consultor OU site).
+    NÃO exiba nenhum campo do bloco `_meta`. NÃO adicione texto depois dos cards.
 
-    CRIAR LEAD DE COMPRA (automático):
-      Quando o cliente quiser falar com um consultor, chame esta ferramenta novamente
-      passando nome_cliente + telefone_cliente + dados do veículo escolhido.
-      O lead é registrado internamente — NÃO existe outra ferramenta para isso.
-      Retorno: campo `lead` com registrado=true/false e mensagem de confirmação.
+    LEAD DE COMPRA AUTOMÁTICO:
+      O cards_markdown já inclui a pergunta ao cliente.
+      Quando o cliente responder que quer falar com consultor e informar nome + telefone,
+      chame esta ferramenta novamente passando nome_cliente + telefone_cliente +
+      dados do veículo escolhido (titulo_card, loja_unidade, plate, etc.).
+      O lead é criado internamente — não existe outra ferramenta para isso.
     """
     # ── Lead automático: criação interna quando cliente confirma interesse ──
     if nome_cliente and telefone_cliente:
@@ -423,53 +468,62 @@ async def estoque_total(
             observacao=observacao,
         )
 
-    logger.info(f"[estoque_total] Chamada iniciada | pagina={pagina}")
-    resultado = await InventoryAggregator.buscar_estoque_paginado(pagina=pagina)
+    if not cidade or not cidade.strip():
+        return {
+            "cards_markdown": (
+                "> Para mostrar os veículos disponíveis, preciso saber: "
+                "**em qual cidade você procura o veículo?**"
+            ),
+            "precisa_cidade": True,
+        }
 
-    veiculos       = resultado["veiculos"]
-    tem_mais       = resultado["tem_mais"]
-    pagina_atual   = resultado["pagina"]
-    total_paginas  = resultado["total_paginas"]
-    fonte          = resultado["fonte_lojas"]
-    lojas_buscadas = resultado["lojas_buscadas"]
+    logger.info(f"[estoque_total] Chamada iniciada | cidade='{cidade}'")
+    lojas = await InventoryAggregator.obter_lista_lojas()
+    fonte = InventoryAggregator._ultima_fonte or "desconhecida"
 
-    logger.info(
-        f"[estoque_total] Concluída | veículos={len(veiculos)} | "
-        f"pagina={pagina_atual}/{total_paginas} | fonte={fonte}"
-    )
+    lojas_cidade = _filtrar_lojas_por_cidade(lojas, cidade)
+    logger.info(f"[estoque_total] Lojas encontradas para '{cidade}': {[l['nome'] for l in lojas_cidade]}")
 
-    aviso = (
-        f"Página {pagina_atual} de {total_paginas} — diga **'ver mais'** para ver as próximas lojas."
-        if tem_mais else
-        f"Última página ({pagina_atual} de {total_paginas}) — todas as lojas foram exibidas."
-    )
+    if not lojas_cidade:
+        return {
+            "cards_markdown": (
+                f"> Não encontramos lojas Primeira Mão em **{cidade}**. "
+                "Tente outra cidade ou UF, ou [veja todas as opções no site]"
+                "(https://www.primeiramaosaga.com.br/gradedeofertas)."
+            ),
+            "_meta": {"cidade": cidade, "fonte_lojas": fonte, "nota": "Bloco interno — NÃO exibir ao cliente."},
+        }
+
+    veiculos = await InventoryAggregator.buscar_estoque_por_lojas(lojas_cidade, limit=25)
+    nomes_lojas = [l["nome"] for l in lojas_cidade]
+    logger.info(f"[estoque_total] Concluída | veículos={len(veiculos)} | lojas={nomes_lojas} | fonte={fonte}")
 
     if not veiculos:
         cards_md = (
-            "> Não há veículos disponíveis no estoque no momento. "
+            f"> Não há veículos disponíveis no momento em **{cidade}**. "
             "Tente novamente em instantes ou entre em contato com uma de nossas lojas."
         )
     else:
+        aviso = f"Exibindo até 25 veículos · Lojas em {cidade}: {', '.join(nomes_lojas)}"
         cards_md = _renderizar_cards(veiculos, aviso=aviso)
 
     return {
         "cards_markdown": cards_md,
         "_meta": {
             "total_veiculos": len(veiculos),
-            "pagina":         pagina_atual,
-            "total_paginas":  total_paginas,
-            "lojas_buscadas": lojas_buscadas,
+            "cidade":         cidade,
+            "lojas_buscadas": nomes_lojas,
             "fonte_lojas":    fonte,
             "nota":           "Bloco interno — NÃO exibir ao cliente.",
         },
         "veiculos": veiculos,
-        "aviso":    aviso,
     }
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True, destructiveHint=False))
 async def buscar_veiculo(
     consulta: Optional[str] = None,
+    cidade: Optional[str] = None,
     # ── Lead automático de compra ──────────────────────────────
     # Preencha estes campos quando o cliente confirmar que quer falar com consultor.
     # O lead é criado internamente — NÃO chame nenhuma outra ferramenta para isso.
@@ -488,7 +542,12 @@ async def buscar_veiculo(
 ):
     """
     Busca curinga: encontra veículos a partir de qualquer descrição em linguagem natural.
-    Exemplos: "quero um corolla branco 2019", "hb20 prata", "abc1234", "SUV abaixo de 80 mil".
+    Exemplos: "quero um corolla branco 2019", "hb20 prata", "abc1234", "SUV abaixo de 80 mil",
+              "quero comprar uma xre 2024", "toyota abaixo de 150 mil".
+
+    ANTES de chamar: se o cliente não informou a cidade, pergunte em qual **cidade** ele
+    busca o veículo e passe no campo `cidade`. Aceita também UF (ex: "GO", "SP").
+    Se a mensagem já contiver cidade/UF, extraia e passe diretamente.
 
     Estratégia em 4 fases — NUNCA retorna vazio:
       1. ID ou placa exata → busca direta em todas as lojas.
@@ -496,14 +555,18 @@ async def buscar_veiculo(
       3. Parte dos termos bate (OR, ordenado por relevância) → similares.
       4. Nenhum termo bate → sugestões do estoque disponível.
 
-    OUTPUT: exiba o campo `cards_markdown` diretamente ao usuário — os cards já estão
-    formatados com imagem, tabela de detalhes, placa, preço e botão de oferta.
+    Retorna no máximo 25 veículos com imagem.
 
-    CRIAR LEAD DE COMPRA (automático):
-      Quando o cliente quiser falar com um consultor, chame esta ferramenta novamente
-      passando nome_cliente + telefone_cliente + dados do veículo escolhido.
-      O lead é registrado internamente — NÃO existe outra ferramenta para isso.
-      Retorno: campo `lead` com registrado=true/false e mensagem de confirmação.
+    OUTPUT: exiba o campo `cards_markdown` diretamente ao usuário — já formatado com
+    imagem, specs técnicos, preço e as duas opções de ação ao final (consultor OU site).
+    NÃO adicione texto depois dos cards — o cards_markdown já inclui a pergunta ao cliente.
+
+    LEAD DE COMPRA AUTOMÁTICO:
+      O cards_markdown já pergunta ao cliente o que ele quer fazer.
+      Quando o cliente responder que quer falar com consultor e informar nome + telefone,
+      chame esta ferramenta novamente passando nome_cliente + telefone_cliente +
+      dados do veículo escolhido (titulo_card, loja_unidade, plate, preco_formatado, etc.).
+      O lead é criado internamente — não existe outra ferramenta para isso.
     """
     # ── Lead automático: criação interna quando cliente confirma interesse ──
     if nome_cliente and telefone_cliente:
@@ -524,10 +587,9 @@ async def buscar_veiculo(
         )
 
     if not consulta or not consulta.strip():
-        # Sem consulta: retorna estoque da primeira página como sugestão
-        return await estoque_total(pagina=1)
+        return await estoque_total(cidade=cidade)
 
-    logger.info(f"[buscar_veiculo] Chamada iniciada | consulta='{consulta}'")
+    logger.info(f"[buscar_veiculo] Chamada iniciada | consulta='{consulta}' | cidade='{cidade}'")
     termo = consulta.strip()
 
     # ── Fase 1: ID ou placa exata (só executa se o termo parece placa/ID) ──
@@ -541,9 +603,20 @@ async def buscar_veiculo(
                 "veiculos": [resultado_exato],
             }
 
-    # ── Carrega TODO o estoque de TODAS as lojas ──
-    estoque = await InventoryAggregator.buscar_estoque_consolidado(limit=None)
-    logger.info(f"[buscar_veiculo] Estoque carregado | {len(estoque)} veículos em todas as lojas")
+    # ── Carrega estoque: filtrado por cidade quando informada ──
+    if cidade and cidade.strip():
+        lojas = await InventoryAggregator.obter_lista_lojas()
+        lojas_cidade = _filtrar_lojas_por_cidade(lojas, cidade)
+        if lojas_cidade:
+            logger.info(f"[buscar_veiculo] Buscando nas lojas de '{cidade}': {[l['nome'] for l in lojas_cidade]}")
+            estoque = await InventoryAggregator.buscar_estoque_por_lojas(lojas_cidade, limit=200)
+        else:
+            logger.warning(f"[buscar_veiculo] Nenhuma loja em '{cidade}' — buscando em todas")
+            estoque = await InventoryAggregator.buscar_estoque_consolidado(limit=None)
+    else:
+        estoque = await InventoryAggregator.buscar_estoque_consolidado(limit=None)
+
+    logger.info(f"[buscar_veiculo] Estoque carregado | {len(estoque)} veículos")
 
     # Extrai palavras-chave ignorando artigos/stopwords ("quero", "um", "cor", etc.)
     palavras = _extrair_palavras_chave(consulta)
@@ -555,7 +628,7 @@ async def buscar_veiculo(
     res_and = [v for v in estoque if _score_veiculo(v, palavras) == len(palavras)]
     if res_and:
         logger.info(f"[buscar_veiculo] Fase 2 (AND) — {len(res_and)} resultados exatos")
-        veiculos_and = res_and[:40]
+        veiculos_and = [v for v in res_and if v.get("url_imagem")][:25]
         return {
             "cards_markdown": _renderizar_cards(veiculos_and, mostrar_placa=True),
             "total":    len(veiculos_and),
@@ -571,7 +644,7 @@ async def buscar_veiculo(
     scored.sort(key=lambda x: x[1], reverse=True)
 
     if scored:
-        res_or = [v for v, _ in scored[:40]]
+        res_or = [v for v, _ in scored if v.get("url_imagem")][:25]
         top_score = scored[0][1]
         logger.info(f"[buscar_veiculo] Fase 3 (OR) — {len(res_or)} similares | top_score={top_score}/{len(palavras)}")
         msg_or = f"Não encontramos exatamente \"{consulta}\", mas veja as opções mais próximas:"
@@ -582,7 +655,7 @@ async def buscar_veiculo(
         }
 
     # ── Fase 4: Sem nenhuma correspondência — retorna sugestões gerais ──
-    sugestoes = [v for v in estoque if v.get("url_imagem")][:20]
+    sugestoes = [v for v in estoque if v.get("url_imagem")][:25]
     logger.info(f"[buscar_veiculo] Fase 4 — sem resultado, sugerindo {len(sugestoes)} veículos")
 
     if not sugestoes:
@@ -652,14 +725,17 @@ async def avaliar_veiculo(
     Todos os dados técnicos (versão, carroceria, combustível, valor FIPE, etc.)
     vêm automaticamente da FIPE pela placa — não pergunte nada disso.
 
-    OUTPUT: exiba o campo `proposta_markdown` diretamente ao usuário — já formatado.
-    Após exibir, aguarde a resposta do cliente e siga o fluxo:
-      - Se confirmar venda → peça nome e telefone → chame avaliar_veiculo novamente
-        passando placa, km E nome_cliente + telefone_cliente.
-        O lead de venda é criado automaticamente — NÃO existe outra ferramenta para isso.
-        O retorno conterá o campo `lead` com registrado=true/false e mensagem de confirmação.
-        Fallback se lead.registrado=false: exiba `url_venda`.
-      - Se recusar → encerre sem chamar nenhuma ferramenta.
+    OUTPUT: exiba o campo `proposta_markdown` diretamente ao usuário — já formatado com
+    o veículo, valor da proposta e as duas opções de ação (consultor OU site).
+    NÃO adicione texto depois da proposta — ela já inclui a pergunta ao cliente.
+
+    LEAD DE VENDA AUTOMÁTICO:
+      Quando o cliente escolher a opção 1️⃣ e informar nome + telefone,
+      chame avaliar_veiculo novamente passando placa, km E nome_cliente + telefone_cliente.
+      O lead é criado internamente — NÃO existe outra ferramenta para isso.
+      O retorno conterá o campo `lead` com registrado=true/false e mensagem de confirmação.
+      Fallback se lead.registrado=false: exiba `url_venda`.
+      Se o cliente recusar → encerre sem chamar nenhuma ferramenta.
     """
     placa_limpa = normalizar_placa(placa)
     logger.info(f"[avaliar_veiculo] Chamada iniciada | placa={placa_limpa} | km={km} | uf={uf} | cor={cor} | existe_zero_km={existe_zero_km}")
@@ -721,17 +797,17 @@ async def avaliar_veiculo(
     km_fmt = _fmt_km(km)
 
     if not valor_numerico:
-        mensagem_zero = (
-            f"Para a placa **{placa_limpa}** com **{km_fmt} km**, não foi possível gerar "
-            "uma proposta automática. A orientação é levar o carro presencialmente para avaliação."
-        )
         proposta_md = (
-            f"**{veiculo_descricao}**  \n"
-            f"🔖 Placa: {placa_limpa} | 📏 {km_fmt} km\n\n"
+            f"## 🚗 {veiculo_descricao}\n\n"
+            f"🔖 Placa: **{placa_limpa}** · 📏 **{km_fmt} km**\n\n"
             f"---\n\n"
-            f"{mensagem_zero}\n\n"
-            f"Deseja que um consultor entre em contato para agendar a avaliação? "
-            f"Se sim, informe seu **nome** e **telefone**."
+            f"Não foi possível gerar uma proposta automática para este veículo. "
+            f"A avaliação precisa ser feita presencialmente.\n\n"
+            f"**O que deseja fazer?**\n\n"
+            f"**1️⃣ Falar com um consultor** — me informe seu **nome** e **telefone** "
+            f"que agendamos a avaliação presencial\n\n"
+            f"**2️⃣ Iniciar pelo site** — "
+            f"[acesse aqui para avaliação online](https://www.primeiramaosaga.com.br/vender/avaliar-veiculo/cliente)"
         )
         logger.info(f"[avaliar_veiculo] Valor zerado | placa={placa_limpa} — orientando avaliação presencial")
         base = {
@@ -760,17 +836,17 @@ async def avaliar_veiculo(
 
     preco_fmt = f"R$ {valor_proposta}"
     proposta_md = (
-        f"## 💰 Proposta de Compra — Saga Primeira Mão\n\n"
-        f"| | |\n"
-        f"|---|---|\n"
-        f"| 🚗 Veículo | {veiculo_descricao} |\n"
-        f"| 🔖 Placa | {placa_limpa} |\n"
-        f"| 📏 KM | {km_fmt} km |\n\n"
-        f"### Valor oferecido pela Saga:\n"
-        f"# {preco_fmt}\n\n"
+        f"## 🚗 {veiculo_descricao}\n\n"
+        f"🔖 Placa: **{placa_limpa}** · 📏 **{km_fmt} km**\n\n"
         f"---\n\n"
-        f"Gostaria de prosseguir com a venda? Informe seu **nome** e **telefone** "
-        f"para que um consultor entre em contato."
+        f"## 💰 Proposta Saga Primeira Mão\n\n"
+        f"### {preco_fmt}\n\n"
+        f"---\n\n"
+        f"**O que deseja fazer?**\n\n"
+        f"**1️⃣ Confirmar venda com consultor** — me informe seu **nome** e **telefone** "
+        f"que um consultor entra em contato para fechar\n\n"
+        f"**2️⃣ Iniciar pelo site** — "
+        f"[acesse aqui para avaliação online](https://www.primeiramaosaga.com.br/vender/avaliar-veiculo/cliente)"
     )
     logger.info(f"[avaliar_veiculo] Proposta gerada | placa={placa_limpa} | valor={valor_proposta}")
     base = {

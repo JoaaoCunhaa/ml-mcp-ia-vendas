@@ -89,12 +89,12 @@ async def test_listar_lojas():
 
 async def test_estoque_total_navegacao():
     print(f"\n{SEP}")
-    print("T02 — estoque_total (navegacao pagina 1)")
+    print("T02 — estoque_total (busca por cidade 'Goiania')")
     print(SEP)
-    r = await estoque_total(pagina=1)
+    r = await estoque_total(cidade="Goiania")
     meta = r.get("_meta", {})
     print(f"  veiculos : {meta.get('total_veiculos')}")
-    print(f"  pagina   : {meta.get('pagina')}/{meta.get('total_paginas')}")
+    print(f"  cidade   : {meta.get('cidade')}")
     print(f"  lojas    : {meta.get('lojas_buscadas')}")
     print(f"  markdown : {r.get('cards_markdown', '')[:120]}...")
 
@@ -113,7 +113,6 @@ async def test_estoque_total_lead_compra():
     print("T03 — estoque_total (lead automatico de compra)")
     print(SEP)
     r = await estoque_total(
-        pagina=1,
         nome_cliente="Teste Compra T03",
         telefone_cliente="62999990003",
         email_cliente="t03@sagadatadriven.com.br",

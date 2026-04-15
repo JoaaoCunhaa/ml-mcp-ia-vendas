@@ -20,6 +20,41 @@ class InventoryAggregator:
             return "R$ --"
 
 
+    # Opcionais relevantes para exibição no card (por prioridade)
+    _OPCIONAIS_DESTAQUE = [
+        "Ar-condicionado", "Ar condicionado",
+        "Direção elétrica", "Direção hidráulica", "Direção assistida",
+        "Vidro elétrico", "Vidros elétricos",
+        "Trava elétrica", "Travas elétricas", "Trava central",
+        "Câmera de ré", "Camera de re",
+        "Freios ABS", "ABS",
+        "Airbag", "Airbags",
+        "Sensor de estacionamento", "Sensores de estacionamento",
+        "Computador de bordo",
+        "Multimídia", "Central multimídia",
+    ]
+
+    @staticmethod
+    def _selecionar_opcionais(features: list, max_items: int = 4) -> list:
+        """Retorna até max_items opcionais priorizando os de destaque."""
+        if not features:
+            return []
+        feat_lower = {f.lower(): f for f in features}
+        selecionados = []
+        for destaque in InventoryAggregator._OPCIONAIS_DESTAQUE:
+            if destaque.lower() in feat_lower:
+                selecionados.append(feat_lower[destaque.lower()])
+            if len(selecionados) >= max_items:
+                break
+        # Completa com outros opcionais se necessário
+        if len(selecionados) < max_items:
+            for f in features:
+                if f not in selecionados:
+                    selecionados.append(f)
+                if len(selecionados) >= max_items:
+                    break
+        return selecionados
+
     @staticmethod
     def simplificar_veiculo(v, loja_nome):
         try:
@@ -27,19 +62,25 @@ class InventoryAggregator:
         except Exception:
             preco = 0.0
 
-        vid      = str(v.get("id") or "")
-        marca    = v.get("makeName") or ""
-        modelo   = v.get("modelName") or ""
-        versao   = v.get("trimName") or ""
-        ano      = v.get("modelYear") or ""
-        km_val   = v.get("km") or ""
-        cor      = v.get("colorName") or ""
-        placa    = v.get("plate") or ""
-        imagens  = v.get("images") or []
+        vid          = str(v.get("id") or "")
+        marca        = v.get("makeName") or ""
+        modelo       = v.get("modelName") or ""
+        versao       = v.get("trimName") or ""
+        ano          = v.get("modelYear") or ""
+        km_val       = v.get("km") or ""
+        cor          = v.get("colorName") or ""
+        placa        = v.get("plate") or ""
+        imagens      = v.get("images") or []
+        carroceria   = v.get("bodystyleName") or ""
+        transmissao  = v.get("transmissionName") or ""
+        combustivel  = v.get("fuelName") or ""
+        portas       = v.get("doors") or ""
+        features_raw = v.get("featuresName") or []
+        opcionais    = InventoryAggregator._selecionar_opcionais(features_raw)
 
         # images é lista de dicts: {'url': '...', 'id': ..., 'position': ...}
-        url_imagem   = imagens[0].get("url", "") if imagens else ""
-        preco_fmt   = InventoryAggregator._formatar_preco(preco)
+        url_imagem = imagens[0].get("url", "") if imagens else ""
+        preco_fmt  = InventoryAggregator._formatar_preco(preco)
 
         return {
             # — dados brutos (uso interno / filtros) —
@@ -53,6 +94,12 @@ class InventoryAggregator:
             "colorName":    cor,
             "plate":        placa,
             "loja_unidade": loja_nome,
+            # — atributos técnicos —
+            "carroceria":   carroceria,
+            "transmissao":  transmissao,
+            "combustivel":  combustivel,
+            "portas":       portas,
+            "opcionais":    opcionais,
             # — campos de renderização visual —
             "url_imagem":      url_imagem,
             "preco_formatado": preco_fmt,
@@ -178,6 +225,45 @@ class InventoryAggregator:
             "fonte_lojas": InventoryAggregator._ultima_fonte or "vazio",
             "lojas_buscadas": [],
         }
+
+    @staticmethod
+    async def buscar_estoque_por_lojas(lojas: list, limit: int = 25) -> list:
+        """Busca estoque de uma lista específica de lojas. Filtra veículos sem imagem e limita ao `limit`."""
+        if not lojas:
+            return []
+
+        token = await MobiautoService.get_token()
+        if not token:
+            logger.error("[buscar_estoque_por_lojas] Sem token — abortando")
+            return []
+
+        tarefas = [
+            MobiautoService.buscar_estoque(l["codigo_svm"], token=token, page_size=50)
+            for l in lojas
+        ]
+        resultados = await asyncio.gather(*tarefas, return_exceptions=True)
+
+        veiculos = []
+        erros = 0
+        for i, lista in enumerate(resultados):
+            nome_loja = lojas[i]["nome"]
+            if isinstance(lista, list):
+                for v in lista:
+                    if not v.get("images"):
+                        continue
+                    veiculos.append(InventoryAggregator.simplificar_veiculo(v, nome_loja))
+                    if len(veiculos) >= limit:
+                        logger.info(f"[buscar_estoque_por_lojas] Limite de {limit} atingido")
+                        return veiculos
+            else:
+                erros += 1
+                logger.error(f"[buscar_estoque_por_lojas] Erro na loja {nome_loja}: {lista}")
+
+        logger.info(
+            f"[buscar_estoque_por_lojas] Concluído | total={len(veiculos)} "
+            f"| lojas_ok={len(lojas) - erros} | lojas_erro={erros}"
+        )
+        return veiculos
 
     @staticmethod
     async def buscar_estoque_consolidado(limit: int = None):

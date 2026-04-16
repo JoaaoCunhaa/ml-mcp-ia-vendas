@@ -3,14 +3,14 @@ Teste completo de todas as tools e funções internas do MCP PrimeiraMao.
 
 Cobre:
   T01 - listar_lojas
-  T02 - estoque_total (navegacao)
-  T03 - estoque_total (lead automatico de compra)
-  T04 - buscar_veiculo (Fase 2 AND)
-  T05 - buscar_veiculo (Fase 4 sem resultado - sugestoes)
-  T06 - buscar_veiculo (sem consulta - fallback para estoque)
-  T07 - buscar_veiculo (lead automatico de compra)
-  T08 - avaliar_veiculo (so proposta, sem lead)
-  T09 - avaliar_veiculo (lead automatico de venda - proposta valida)
+  T02 - estoque_total (retorna string com cards markdown)
+  T03 - registrar_interesse_compra (tool explícita de lead de compra)
+  T04 - buscar_veiculo (Fase 2 AND - retorna string)
+  T05 - buscar_veiculo (Fase 4 sem resultado - retorna string)
+  T06 - buscar_veiculo (sem consulta - fallback para estoque_total)
+  T07 - registrar_interesse_compra (segunda chamada - via buscar_veiculo flow)
+  T08 - avaliar_veiculo (so proposta, retorna string)
+  T09 - registrar_interesse_venda (tool explícita de lead de venda)
   T10 - _criar_lead_compra (funcao interna direta)
   T11 - _criar_lead_venda (funcao interna direta)
   T12 - _disparar_webhook compra (funcao interna direta)
@@ -37,6 +37,8 @@ from main import (
     estoque_total,
     buscar_veiculo,
     avaliar_veiculo,
+    registrar_interesse_compra,
+    registrar_interesse_venda,
     _criar_lead_compra,
     _criar_lead_venda,
     _disparar_webhook,
@@ -84,7 +86,7 @@ async def test_listar_lojas():
 
 
 # ─────────────────────────────────────────────────────────────
-# T02 — estoque_total (apenas navegacao, sem lead)
+# T02 — estoque_total (retorna string com cards markdown)
 # ─────────────────────────────────────────────────────────────
 
 async def test_estoque_total_navegacao():
@@ -92,38 +94,33 @@ async def test_estoque_total_navegacao():
     print("T02 — estoque_total (busca por cidade 'Goiania')")
     print(SEP)
     r = await estoque_total(cidade="Goiania")
-    meta = r.get("_meta", {})
-    print(f"  veiculos : {meta.get('total_veiculos')}")
-    print(f"  cidade   : {meta.get('cidade')}")
-    print(f"  lojas    : {meta.get('lojas_buscadas')}")
-    print(f"  markdown : {r.get('cards_markdown', '')[:120]}...")
+    print(f"  tipo     : {type(r).__name__}")
+    print(f"  tamanho  : {len(r) if isinstance(r, str) else 'N/A'} chars")
+    print(f"  preview  : {str(r)[:120]}...")
 
-    checar("cards_markdown presente",  bool(r.get("cards_markdown")))
-    checar("_meta presente",           bool(meta))
-    checar("nao tem campo 'lead'",     "lead" not in r,  "lead nao deve aparecer sem nome_cliente")
+    checar("retorna string",             isinstance(r, str),  f"tipo={type(r).__name__}")
+    checar("string nao vazia",           bool(r and r.strip()))
+    checar("contem imagem markdown",     "![" in r or ">" in r,  "deve ter imagem ou mensagem de aviso")
     return r
 
 
 # ─────────────────────────────────────────────────────────────
-# T03 — estoque_total com lead automatico de compra
+# T03 — registrar_interesse_compra (tool explicita)
 # ─────────────────────────────────────────────────────────────
 
-async def test_estoque_total_lead_compra():
+async def test_registrar_interesse_compra():
     print(f"\n{SEP}")
-    print("T03 — estoque_total (lead automatico de compra)")
+    print("T03 — registrar_interesse_compra (tool explicita)")
     print(SEP)
-    r = await estoque_total(
+    r = await registrar_interesse_compra(
         nome_cliente="Teste Compra T03",
         telefone_cliente="62999990003",
         email_cliente="t03@sagadatadriven.com.br",
-        titulo_card="Honda Civic 2021",
-        loja_unidade="SN GO BURITI",
+        titulo_veiculo="Honda Civic 2021",
+        loja_unidade="Primeira Mão GO BURITI",
         plate="TST0003",
-        modelYear="2021",
-        km="32000",
-        colorName="Preto",
         preco_formatado="R$ 89.900,00",
-        observacao="Teste automatico T03 — lead compra via estoque_total",
+        observacao="Teste automatico T03 — registrar_interesse_compra",
     )
     print(f"  registrado : {r.get('registrado')}")
     print(f"  dealer_id  : {r.get('dealer_id')}")
@@ -138,7 +135,7 @@ async def test_estoque_total_lead_compra():
 
 
 # ─────────────────────────────────────────────────────────────
-# T04 — buscar_veiculo (busca normal Fase 2 AND)
+# T04 — buscar_veiculo (busca normal Fase 2 AND - retorna string)
 # ─────────────────────────────────────────────────────────────
 
 async def test_buscar_veiculo_normal():
@@ -146,12 +143,13 @@ async def test_buscar_veiculo_normal():
     print("T04 — buscar_veiculo (busca 'honda')")
     print(SEP)
     r = await buscar_veiculo(consulta="honda")
-    print(f"  total    : {r.get('total')}")
-    print(f"  markdown : {r.get('cards_markdown', '')[:120]}...")
+    print(f"  tipo     : {type(r).__name__}")
+    print(f"  tamanho  : {len(r) if isinstance(r, str) else 'N/A'} chars")
+    print(f"  preview  : {str(r)[:120]}...")
 
-    checar("cards_markdown presente",  bool(r.get("cards_markdown")))
-    checar("_meta presente",           bool(r.get("_meta")))
-    checar("nao tem campo 'lead'",     "lead" not in r)
+    checar("retorna string",          isinstance(r, str),  f"tipo={type(r).__name__}")
+    checar("string nao vazia",        bool(r and r.strip()))
+    checar("contem imagem markdown",  "![" in r or ">" in r)
     return r
 
 
@@ -164,11 +162,12 @@ async def test_buscar_veiculo_sem_resultado():
     print("T05 — buscar_veiculo (consulta improvavel — Fase 4)")
     print(SEP)
     r = await buscar_veiculo(consulta="marcaxyzimpossivelzz")
-    print(f"  total    : {r.get('total')}")
-    print(f"  markdown : {r.get('cards_markdown', '')[:200]}...")
+    print(f"  tipo    : {type(r).__name__}")
+    print(f"  preview : {str(r)[:200]}...")
 
-    checar("cards_markdown presente",        bool(r.get("cards_markdown")))
-    checar("mensagem de fallback no markdown", "Não encontramos" in r.get("cards_markdown", "") or r.get("total", 0) > 0)
+    checar("retorna string",                  isinstance(r, str),  f"tipo={type(r).__name__}")
+    checar("string nao vazia",                bool(r and r.strip()))
+    checar("contem mensagem de nao encontrado ou cards", "Não encontramos" in r or "![" in r)
     return r
 
 
@@ -181,34 +180,31 @@ async def test_buscar_veiculo_sem_consulta():
     print("T06 — buscar_veiculo (sem consulta — delega para estoque_total)")
     print(SEP)
     r = await buscar_veiculo(consulta=None)
-    print(f"  chaves retornadas : {list(r.keys())}")
-    print(f"  markdown          : {r.get('cards_markdown', '')[:80]}...")
+    print(f"  tipo    : {type(r).__name__}")
+    print(f"  preview : {str(r)[:80]}...")
 
-    checar("cards_markdown presente",  bool(r.get("cards_markdown")))
+    checar("retorna string",  isinstance(r, str),  f"tipo={type(r).__name__}")
+    checar("string nao vazia", bool(r and r.strip()))
     return r
 
 
 # ─────────────────────────────────────────────────────────────
-# T07 — buscar_veiculo com lead automatico de compra
+# T07 — registrar_interesse_compra (segunda chamada — validacao de flow)
 # ─────────────────────────────────────────────────────────────
 
-async def test_buscar_veiculo_lead_compra():
+async def test_registrar_interesse_compra_2():
     print(f"\n{SEP}")
-    print("T07 — buscar_veiculo (lead automatico de compra)")
+    print("T07 — registrar_interesse_compra (segunda chamada)")
     print(SEP)
-    r = await buscar_veiculo(
-        consulta=None,
+    r = await registrar_interesse_compra(
         nome_cliente="Teste Compra T07",
         telefone_cliente="62999990007",
         email_cliente="t07@sagadatadriven.com.br",
-        titulo_card="Toyota Corolla 2022",
-        loja_unidade="SN GO APARECIDA",
+        titulo_veiculo="Toyota Corolla 2022",
+        loja_unidade="Primeira Mão GO APARECIDA",
         plate="TST0007",
-        modelYear="2022",
-        km="18000",
-        colorName="Prata",
         preco_formatado="R$ 115.000,00",
-        observacao="Teste automatico T07 — lead compra via buscar_veiculo",
+        observacao="Teste automatico T07 — registrar_interesse_compra",
     )
     print(f"  registrado : {r.get('registrado')}")
     print(f"  dealer_id  : {r.get('dealer_id')}")
@@ -223,7 +219,7 @@ async def test_buscar_veiculo_lead_compra():
 
 
 # ─────────────────────────────────────────────────────────────
-# T08 — avaliar_veiculo (apenas proposta, sem lead)
+# T08 — avaliar_veiculo (retorna string com proposta)
 # ─────────────────────────────────────────────────────────────
 
 async def test_avaliar_veiculo_proposta():
@@ -232,49 +228,43 @@ async def test_avaliar_veiculo_proposta():
     print("  placa=RUR9J56 | km=38000")
     print(SEP)
     r = await avaliar_veiculo(placa="RUR9J56", km="38000")
-    print(f"  proposta_disponivel : {r.get('proposta_disponivel')}")
-    print(f"  veiculo_descricao   : {r.get('veiculo_descricao')}")
-    print(f"  preco_formatado     : {r.get('preco_formatado', 'N/A (valor zero)')}")
-    print(f"  url_venda           : {r.get('url_venda')}")
-    print(f"  markdown (100c)     : {r.get('proposta_markdown', '')[:100]}...")
+    print(f"  tipo     : {type(r).__name__}")
+    print(f"  tamanho  : {len(r) if isinstance(r, str) else 'N/A'} chars")
+    print(f"  preview  : {str(r)[:120]}...")
 
-    checar("proposta_markdown presente",  bool(r.get("proposta_markdown")))
-    checar("url_venda presente",          bool(r.get("url_venda")))
-    checar("nao tem campo 'lead'",        "lead" not in r,  "lead nao deve existir sem nome_cliente")
-    checar("sem erro de FIPE",            "error" not in r, f"error={r.get('error')}")
+    checar("retorna string",          isinstance(r, str),  f"tipo={type(r).__name__}")
+    checar("string nao vazia",        bool(r and r.strip()))
+    checar("contem placa no markdown", "RUR9J56" in r or ">" in r)
+    checar("sem erro de FIPE",        "Não foi possível consultar a FIPE" not in r, f"detalhe={str(r)[:100]}")
     return r
 
 
 # ─────────────────────────────────────────────────────────────
-# T09 — avaliar_veiculo com lead automatico de venda
+# T09 — registrar_interesse_venda (tool explicita)
 # ─────────────────────────────────────────────────────────────
 
-async def test_avaliar_veiculo_lead_venda():
+async def test_registrar_interesse_venda():
     print(f"\n{SEP}")
-    print("T09 — avaliar_veiculo (lead automatico de venda)")
-    print("  placa=RUR9J56 | km=38000 | cliente=Teste Venda T09")
+    print("T09 — registrar_interesse_venda (tool explicita)")
     print(SEP)
-    r = await avaliar_veiculo(
-        placa="RUR9J56",
-        km="38000",
-        uf="GO",
+    r = await registrar_interesse_venda(
         nome_cliente="Teste Venda T09",
         telefone_cliente="62999990009",
         email_cliente="t09@sagadatadriven.com.br",
-        observacao="Teste automatico T09 — lead venda via avaliar_veiculo",
+        placa="RUR9J56",
+        km="38000",
+        veiculo_descricao="Honda Civic 2021",
+        observacao="Teste automatico T09 — registrar_interesse_venda",
     )
-    lead = r.get("lead", {})
-    print(f"  proposta_disponivel : {r.get('proposta_disponivel')}")
-    print(f"  lead.registrado     : {lead.get('registrado')}")
-    print(f"  lead.dealer_id      : {lead.get('dealer_id')}")
-    print(f"  lead.mensagem       : {lead.get('mensagem')}")
-    print(f"  lead.fallback_url   : {lead.get('fallback_url')}")
+    print(f"  registrado : {r.get('registrado')}")
+    print(f"  dealer_id  : {r.get('dealer_id')}")
+    print(f"  mensagem   : {r.get('mensagem')}")
+    print(f"  fallback   : {r.get('fallback_url')}")
 
-    checar("proposta_markdown presente",   bool(r.get("proposta_markdown")))
-    checar("campo lead presente",          "lead" in r,         "lead deve existir com nome_cliente")
-    checar("lead.registrado com sucesso",  lead.get("registrado") is True, f"mensagem={lead.get('mensagem')}")
-    checar("lead.dealer_id preenchido",    bool(lead.get("dealer_id")))
-    checar("lead.fallback_url presente",   bool(lead.get("fallback_url")))
+    checar("campo registrado presente",   "registrado" in r)
+    checar("lead registrado com sucesso",  r.get("registrado") is True, f"mensagem={r.get('mensagem')}")
+    checar("dealer_id preenchido",         bool(r.get("dealer_id")))
+    checar("fallback_url presente",        bool(r.get("fallback_url")))
     return r
 
 
@@ -392,13 +382,13 @@ async def main():
 
     await test_listar_lojas()
     await test_estoque_total_navegacao()
-    await test_estoque_total_lead_compra()
+    await test_registrar_interesse_compra()
     await test_buscar_veiculo_normal()
     await test_buscar_veiculo_sem_resultado()
     await test_buscar_veiculo_sem_consulta()
-    await test_buscar_veiculo_lead_compra()
+    await test_registrar_interesse_compra_2()
     await test_avaliar_veiculo_proposta()
-    await test_avaliar_veiculo_lead_venda()
+    await test_registrar_interesse_venda()
     await test_criar_lead_compra_direto()
     await test_criar_lead_venda_direto()
     await test_disparar_webhook()

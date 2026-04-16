@@ -220,21 +220,6 @@ _CTA_OPCOES = (
     "[Livro de Ofertas Primeira Mão](https://www.primeiramaosaga.com.br/gradedeofertas)"
 )
 
-_PROXIMA_ACAO_COMPRA = (
-    "Exibiu os cards acima. Agora pergunte ao cliente: "
-    "'Algum desses veículos te interessou? Se quiser, posso registrar seu interesse "
-    "e um consultor da Saga entra em contato — é só me informar seu nome e telefone!' "
-    "Se o cliente confirmar, colete nome e telefone e chame registrar_interesse_compra."
-)
-
-_PROXIMA_ACAO_VENDA = (
-    "Exibiu a proposta acima. Agora pergunte ao cliente: "
-    "'Gostaria de prosseguir com a venda? Se sim, posso registrar agora — "
-    "é só me informar seu nome e telefone!' "
-    "Se o cliente confirmar, colete nome e telefone e chame registrar_interesse_venda "
-    "passando placa, km e veiculo_descricao."
-)
-
 
 def _renderizar_cards(
     veiculos: list,
@@ -428,24 +413,7 @@ async def listar_lojas():
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True, destructiveHint=False))
-async def estoque_total(
-    cidade: Optional[str] = None,
-    # ── Lead automático de compra ──────────────────────────────
-    # Preencha estes campos quando o cliente confirmar que quer falar com consultor.
-    # O lead é criado internamente — NÃO chame nenhuma outra ferramenta para isso.
-    nome_cliente: Optional[str] = None,
-    telefone_cliente: Optional[str] = None,
-    email_cliente: Optional[str] = None,
-    titulo_card: Optional[str] = None,
-    veiculo_id: Optional[str] = None,
-    preco_formatado: Optional[str] = None,
-    loja_unidade: Optional[str] = None,
-    plate: Optional[str] = None,
-    modelYear: Optional[str] = None,
-    km: Optional[str] = None,
-    colorName: Optional[str] = None,
-    observacao: Optional[str] = None,
-):
+async def estoque_total(cidade: Optional[str] = None):
     """
     Exibe até 25 veículos disponíveis nas lojas Primeira Mão Saga da cidade informada.
 
@@ -453,41 +421,19 @@ async def estoque_total(
     Pergunte primeiro: "Em qual cidade você procura o veículo?"
     Só chame com o campo `cidade` preenchido. Aceita também UF (ex: "GO", "SP").
 
-    EXIBIÇÃO OBRIGATÓRIA: exiba o campo `cards_markdown` palavra por palavra.
-    NÃO resuma, NÃO categorize, NÃO reformate e NÃO adicione texto próprio.
+    EXIBIÇÃO OBRIGATÓRIA: copie e cole o resultado desta ferramenta palavra por palavra,
+    incluindo todas as linhas de imagem (![...](...)) e de preço. NÃO resuma, NÃO categorize,
+    NÃO reformate e NÃO adicione texto próprio.
 
-    APÓS EXIBIR O MARKDOWN:
-      O campo `proxima_acao` contém a instrução exata do que perguntar ao cliente.
-      Execute-a imediatamente após exibir cards_markdown — não adicione texto próprio.
-      Se o cliente confirmar interesse: colete nome e telefone e chame `registrar_interesse_compra`
-      passando nome_cliente, telefone_cliente, titulo_veiculo, loja_unidade, preco_formatado.
+    Após exibir: se o cliente confirmar interesse em algum veículo, colete nome e telefone
+    e chame `registrar_interesse_compra` com nome_cliente, telefone_cliente, titulo_veiculo,
+    loja_unidade e preco_formatado.
     """
-    # ── Lead automático: criação interna quando cliente confirma interesse ──
-    if nome_cliente and telefone_cliente:
-        logger.info(f"[estoque_total] Lead automático de compra | cliente='{nome_cliente}' | veiculo='{titulo_card}'")
-        return await _criar_lead_compra(
-            nome_cliente=nome_cliente,
-            telefone_cliente=telefone_cliente,
-            email_cliente=email_cliente or "",
-            titulo_card=titulo_card,
-            veiculo_id=veiculo_id,
-            preco_formatado=preco_formatado,
-            loja_unidade=loja_unidade,
-            plate=plate,
-            modelYear=modelYear,
-            km=km,
-            colorName=colorName,
-            observacao=observacao,
-        )
-
     if not cidade or not cidade.strip():
-        return {
-            "cards_markdown": (
-                "> Para mostrar os veículos disponíveis, preciso saber: "
-                "**em qual cidade você procura o veículo?**"
-            ),
-            "precisa_cidade": True,
-        }
+        return (
+            "> Para mostrar os veículos disponíveis, preciso saber: "
+            "**em qual cidade você procura o veículo?**"
+        )
 
     logger.info(f"[estoque_total] Chamada iniciada | cidade='{cidade}'")
     lojas = await InventoryAggregator.obter_lista_lojas()
@@ -497,59 +443,30 @@ async def estoque_total(
     logger.info(f"[estoque_total] Lojas encontradas para '{cidade}': {[l['nome'] for l in lojas_cidade]}")
 
     if not lojas_cidade:
-        return {
-            "cards_markdown": (
-                f"> Não encontramos lojas Primeira Mão em **{cidade}**. "
-                "Tente outra cidade ou UF, ou [veja todas as opções no site]"
-                "(https://www.primeiramaosaga.com.br/gradedeofertas)."
-            ),
-            "_meta": {"cidade": cidade, "fonte_lojas": fonte, "nota": "Bloco interno — NÃO exibir ao cliente."},
-        }
+        return (
+            f"> Não encontramos lojas Primeira Mão em **{cidade}**. "
+            "Tente outra cidade ou UF, ou [veja todas as opções no site]"
+            "(https://www.primeiramaosaga.com.br/gradedeofertas)."
+        )
 
     veiculos = await InventoryAggregator.buscar_estoque_por_lojas(lojas_cidade, limit=25)
     nomes_lojas = [l["nome"] for l in lojas_cidade]
     logger.info(f"[estoque_total] Concluída | veículos={len(veiculos)} | lojas={nomes_lojas} | fonte={fonte}")
 
     if not veiculos:
-        cards_md = (
+        return (
             f"> Não há veículos disponíveis no momento em **{cidade}**. "
             "Tente novamente em instantes ou entre em contato com uma de nossas lojas."
         )
-    else:
-        aviso = f"Exibindo até 25 veículos · Lojas em {cidade}: {', '.join(nomes_lojas)}"
-        cards_md = _renderizar_cards(veiculos, aviso=aviso)
 
-    return {
-        "cards_markdown":  cards_md,
-        "proxima_acao":    _PROXIMA_ACAO_COMPRA if veiculos else None,
-        "_meta": {
-            "total_veiculos": len(veiculos),
-            "cidade":         cidade,
-            "lojas_buscadas": nomes_lojas,
-            "nota":           "NÃO exibir ao cliente. Exiba APENAS cards_markdown.",
-        },
-    }
+    aviso = f"Exibindo até 25 veículos · Lojas em {cidade}: {', '.join(nomes_lojas)}"
+    return _renderizar_cards(veiculos, aviso=aviso)
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True, destructiveHint=False))
 async def buscar_veiculo(
     consulta: Optional[str] = None,
     cidade: Optional[str] = None,
-    # ── Lead automático de compra ──────────────────────────────
-    # Preencha estes campos quando o cliente confirmar que quer falar com consultor.
-    # O lead é criado internamente — NÃO chame nenhuma outra ferramenta para isso.
-    nome_cliente: Optional[str] = None,
-    telefone_cliente: Optional[str] = None,
-    email_cliente: Optional[str] = None,
-    titulo_card: Optional[str] = None,
-    veiculo_id: Optional[str] = None,
-    preco_formatado: Optional[str] = None,
-    loja_unidade: Optional[str] = None,
-    plate: Optional[str] = None,
-    modelYear: Optional[str] = None,
-    km: Optional[str] = None,
-    colorName: Optional[str] = None,
-    observacao: Optional[str] = None,
 ):
     """
     Busca curinga: encontra veículos a partir de qualquer descrição em linguagem natural.
@@ -567,33 +484,14 @@ async def buscar_veiculo(
 
     Retorna no máximo 25 veículos com imagem.
 
-    EXIBIÇÃO OBRIGATÓRIA: exiba o campo `cards_markdown` palavra por palavra.
-    NÃO resuma, NÃO categorize, NÃO reformate e NÃO adicione texto próprio.
+    EXIBIÇÃO OBRIGATÓRIA: copie e cole o resultado desta ferramenta palavra por palavra,
+    incluindo todas as linhas de imagem (![...](...)) e de preço. NÃO resuma, NÃO categorize,
+    NÃO reformate e NÃO adicione texto próprio.
 
-    APÓS EXIBIR O MARKDOWN:
-      O campo `proxima_acao` contém a instrução exata do que perguntar ao cliente.
-      Execute-a imediatamente após exibir cards_markdown — não adicione texto próprio.
-      Se o cliente confirmar interesse: colete nome e telefone e chame `registrar_interesse_compra`
-      passando nome_cliente, telefone_cliente, titulo_veiculo, loja_unidade, preco_formatado.
+    Após exibir: se o cliente confirmar interesse em algum veículo, colete nome e telefone
+    e chame `registrar_interesse_compra` com nome_cliente, telefone_cliente, titulo_veiculo,
+    loja_unidade e preco_formatado.
     """
-    # ── Lead automático: criação interna quando cliente confirma interesse ──
-    if nome_cliente and telefone_cliente:
-        logger.info(f"[buscar_veiculo] Lead automático de compra | cliente='{nome_cliente}' | veiculo='{titulo_card}'")
-        return await _criar_lead_compra(
-            nome_cliente=nome_cliente,
-            telefone_cliente=telefone_cliente,
-            email_cliente=email_cliente or "",
-            titulo_card=titulo_card,
-            veiculo_id=veiculo_id,
-            preco_formatado=preco_formatado,
-            loja_unidade=loja_unidade,
-            plate=plate,
-            modelYear=modelYear,
-            km=km,
-            colorName=colorName,
-            observacao=observacao,
-        )
-
     if not consulta or not consulta.strip():
         return await estoque_total(cidade=cidade)
 
@@ -605,11 +503,7 @@ async def buscar_veiculo(
         resultado_exato = await InventoryAggregator.buscar_veiculo_especifico(termo)
         if resultado_exato:
             logger.info(f"[buscar_veiculo] Fase 1 — encontrado por ID/placa")
-            return {
-                "cards_markdown": _renderizar_cards([resultado_exato], mostrar_placa=True),
-                "proxima_acao":   _PROXIMA_ACAO_COMPRA,
-                "_meta": {"total": 1, "nota": "NÃO exibir ao cliente. Exiba APENAS cards_markdown."},
-            }
+            return _renderizar_cards([resultado_exato], mostrar_placa=True)
 
     # ── Carrega estoque: filtrado por cidade quando informada ──
     if cidade and cidade.strip():
@@ -637,11 +531,7 @@ async def buscar_veiculo(
     if res_and:
         logger.info(f"[buscar_veiculo] Fase 2 (AND) — {len(res_and)} resultados exatos")
         veiculos_and = [v for v in res_and if v.get("url_imagem")][:25]
-        return {
-            "cards_markdown": _renderizar_cards(veiculos_and, mostrar_placa=True),
-            "proxima_acao":   _PROXIMA_ACAO_COMPRA,
-            "_meta": {"total": len(veiculos_and), "nota": "NÃO exibir ao cliente. Exiba APENAS cards_markdown."},
-        }
+        return _renderizar_cards(veiculos_and, mostrar_placa=True)
 
     # ── Fase 3: OR com ranking — ordena por quantos termos batem ──
     scored = [
@@ -656,30 +546,20 @@ async def buscar_veiculo(
         top_score = scored[0][1]
         logger.info(f"[buscar_veiculo] Fase 3 (OR) — {len(res_or)} similares | top_score={top_score}/{len(palavras)}")
         msg_or = f"Não encontramos exatamente \"{consulta}\", mas veja as opções mais próximas:"
-        return {
-            "cards_markdown": _renderizar_cards(res_or, mensagem=msg_or, mostrar_placa=True),
-            "proxima_acao":   _PROXIMA_ACAO_COMPRA,
-            "_meta": {"total": len(res_or), "nota": "NÃO exibir ao cliente. Exiba APENAS cards_markdown."},
-        }
+        return _renderizar_cards(res_or, mensagem=msg_or, mostrar_placa=True)
 
     # ── Fase 4: Sem nenhuma correspondência — retorna sugestões gerais ──
     sugestoes = [v for v in estoque if v.get("url_imagem")][:25]
     logger.info(f"[buscar_veiculo] Fase 4 — sem resultado, sugerindo {len(sugestoes)} veículos")
 
     if not sugestoes:
-        cards_md_f4 = (
+        return (
             f"> Não encontramos **\"{consulta}\"** e não há veículos disponíveis no estoque no momento. "
             "Tente novamente em breve ou entre em contato com uma de nossas lojas."
         )
-    else:
-        msg_f4 = f"Não encontramos \"{consulta}\" no estoque atual. Confira outras opções disponíveis:"
-        cards_md_f4 = _renderizar_cards(sugestoes, mensagem=msg_f4, mostrar_placa=True)
 
-    return {
-        "cards_markdown": cards_md_f4,
-        "proxima_acao":   _PROXIMA_ACAO_COMPRA if sugestoes else None,
-        "_meta": {"total": len(sugestoes), "nota": "NÃO exibir ao cliente. Exiba APENAS cards_markdown."},
-    }
+    msg_f4 = f"Não encontramos \"{consulta}\" no estoque atual. Confira outras opções disponíveis:"
+    return _renderizar_cards(sugestoes, mensagem=msg_f4, mostrar_placa=True)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -713,13 +593,6 @@ async def avaliar_veiculo(
     uf: Optional[str] = None,
     cor: Optional[str] = None,
     existe_zero_km: Optional[str] = None,
-    # ── Lead automático de venda ───────────────────────────────
-    # Preencha estes campos quando o cliente confirmar que quer prosseguir com a venda.
-    # O lead é criado internamente — NÃO chame nenhuma outra ferramenta para isso.
-    nome_cliente: Optional[str] = None,
-    telefone_cliente: Optional[str] = None,
-    email_cliente: Optional[str] = None,
-    observacao: Optional[str] = None,
 ):
     """
     Calcula a proposta de compra/troca do veículo do cliente.
@@ -733,15 +606,12 @@ async def avaliar_veiculo(
     Todos os dados técnicos (versão, carroceria, combustível, valor FIPE, etc.)
     vêm automaticamente da FIPE pela placa — não pergunte nada disso.
 
-    OUTPUT: exiba o campo `proposta_markdown` palavra por palavra. NÃO adicione texto próprio.
+    EXIBIÇÃO OBRIGATÓRIA: copie e cole o resultado desta ferramenta palavra por palavra.
+    NÃO adicione texto próprio.
 
-    APÓS EXIBIR O MARKDOWN:
-      O campo `proxima_acao` contém a instrução exata do que perguntar ao cliente.
-      Execute-a imediatamente após exibir proposta_markdown.
-      Se o cliente confirmar interesse: colete nome e telefone e chame `registrar_interesse_venda`
-      passando nome_cliente, telefone_cliente, placa, km, veiculo_descricao, valor_proposta.
-      Se registrado=false, exiba o link `url_venda` como alternativa.
-      Se o cliente recusar → encerre sem chamar nenhuma ferramenta.
+    Após exibir: se o cliente confirmar interesse (opção 1️⃣), colete nome e telefone
+    e chame `registrar_interesse_venda` com nome_cliente, telefone_cliente, placa, km
+    e veiculo_descricao (ex: "Honda Civic 2021"). Se o cliente recusar → encerre.
     """
     placa_limpa = normalizar_placa(placa)
     logger.info(f"[avaliar_veiculo] Chamada iniciada | placa={placa_limpa} | km={km} | uf={uf} | cor={cor} | existe_zero_km={existe_zero_km}")
@@ -750,14 +620,11 @@ async def avaliar_veiculo(
 
     if "error" in fipe:
         logger.warning(f"[avaliar_veiculo] Falha FIPE | placa={placa_limpa} | detalhe={fipe}")
-        return {
-            "error":    "Não foi possível consultar a FIPE.",
-            "detalhe":  fipe,
-            "mensagem": "Verifique a placa informada e tente novamente.",
-        }
+        return (
+            f"> Não foi possível consultar a FIPE para a placa **{placa_limpa}**. "
+            "Verifique a placa informada e tente novamente."
+        )
 
-    # Campos técnicos: todos vêm da FIPE
-    # Campos contextuais (uf, cor, existe_zero_km): do cliente se mencionou, senão padrão
     dados = {
         "placa":            placa_limpa,
         "km":               km,
@@ -786,9 +653,13 @@ async def avaliar_veiculo(
 
     if "error" in resultado:
         logger.warning(f"[avaliar_veiculo] Erro precificação | placa={placa_limpa} | detalhe={resultado}")
-        return resultado
+        return (
+            f"> Não foi possível calcular a proposta para a placa **{placa_limpa}**. "
+            f"Detalhe: {resultado.get('error', 'erro desconhecido')}. "
+            "Tente novamente ou [inicie pelo site]"
+            "(https://www.primeiramaosaga.com.br/vender/avaliar-veiculo/cliente)."
+        )
 
-    URL_VENDA = "https://www.primeiramaosaga.com.br/vender/avaliar-veiculo/cliente"
     valor_proposta = resultado.get("Valor_proposta_compra") or resultado.get("valor_proposta_compra")
 
     try:
@@ -799,11 +670,11 @@ async def avaliar_veiculo(
         valor_numerico = 0
 
     veiculo_descricao = f"{fipe.get('marca', '')} {fipe.get('modelo', '')} {fipe.get('ano_modelo', '')}".strip()
-
     km_fmt = _fmt_km(km)
 
     if not valor_numerico:
-        proposta_md = (
+        logger.info(f"[avaliar_veiculo] Valor zerado | placa={placa_limpa} — orientando avaliação presencial")
+        return (
             f"## 🚗 {veiculo_descricao}\n\n"
             f"🔖 Placa: **{placa_limpa}** · 📏 **{km_fmt} km**\n\n"
             f"---\n\n"
@@ -815,34 +686,10 @@ async def avaliar_veiculo(
             f"**2️⃣ Iniciar pelo site** — "
             f"[acesse aqui para avaliação online](https://www.primeiramaosaga.com.br/vender/avaliar-veiculo/cliente)"
         )
-        logger.info(f"[avaliar_veiculo] Valor zerado | placa={placa_limpa} — orientando avaliação presencial")
-        base = {
-            "proposta_markdown":   proposta_md,
-            "proxima_acao":        _PROXIMA_ACAO_VENDA,
-            "proposta_disponivel": False,
-            "veiculo_descricao":   veiculo_descricao,
-            "url_venda":           URL_VENDA,
-        }
-        if nome_cliente and telefone_cliente:
-            logger.info(f"[avaliar_veiculo] Lead automático de venda (valor zero) | cliente='{nome_cliente}' | placa={placa_limpa}")
-            base["lead"] = await _criar_lead_venda(
-                nome_cliente=nome_cliente,
-                telefone_cliente=telefone_cliente,
-                email_cliente=email_cliente or "",
-                placa=placa_limpa,
-                km=km,
-                veiculo_descricao=veiculo_descricao,
-                marca=fipe.get("marca"),
-                modelo=fipe.get("modelo"),
-                ano_modelo=str(fipe.get("ano_modelo") or ""),
-                cor=cor,
-                uf=uf,
-                observacao=observacao,
-            )
-        return base
 
     preco_fmt = f"R$ {valor_proposta}"
-    proposta_md = (
+    logger.info(f"[avaliar_veiculo] Proposta gerada | placa={placa_limpa} | valor={valor_proposta}")
+    return (
         f"## 🚗 {veiculo_descricao}\n\n"
         f"🔖 Placa: **{placa_limpa}** · 📏 **{km_fmt} km**\n\n"
         f"---\n\n"
@@ -855,35 +702,6 @@ async def avaliar_veiculo(
         f"**2️⃣ Iniciar pelo site** — "
         f"[acesse aqui para avaliação online](https://www.primeiramaosaga.com.br/vender/avaliar-veiculo/cliente)"
     )
-    logger.info(f"[avaliar_veiculo] Proposta gerada | placa={placa_limpa} | valor={valor_proposta}")
-    base = {
-        "proposta_markdown":     proposta_md,
-        "proxima_acao":          _PROXIMA_ACAO_VENDA,
-        "proposta_disponivel":   True,
-        "veiculo_descricao":     veiculo_descricao,
-        "Valor_proposta_compra": valor_proposta,
-        "preco_formatado":       preco_fmt,
-        "url_venda":             URL_VENDA,
-    }
-    if nome_cliente and telefone_cliente:
-        logger.info(f"[avaliar_veiculo] Lead automático de venda | cliente='{nome_cliente}' | placa={placa_limpa} | valor={valor_proposta}")
-        base["lead"] = await _criar_lead_venda(
-            nome_cliente=nome_cliente,
-            telefone_cliente=telefone_cliente,
-            email_cliente=email_cliente or "",
-            placa=placa_limpa,
-            km=km,
-            veiculo_descricao=veiculo_descricao,
-            valor_proposta=str(valor_proposta),
-            preco_formatado=preco_fmt,
-            marca=fipe.get("marca"),
-            modelo=fipe.get("modelo"),
-            ano_modelo=str(fipe.get("ano_modelo") or ""),
-            cor=cor,
-            uf=uf,
-            observacao=observacao,
-        )
-    return base
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, openWorldHint=False, destructiveHint=False))

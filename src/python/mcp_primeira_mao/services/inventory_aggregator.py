@@ -126,7 +126,9 @@ class InventoryAggregator:
             # Suporta colunas do banco (loja_nome, dealerid, uf, agente_nome)
             # e do CSV mock     (vc_empresa, nm_codigo_svm, vc_uf, vc_cidade)
             codigo  = l.get("dealerid")   or l.get("nm_codigo_svm")
-            nome    = l.get("loja_nome")  or l.get("vc_empresa")        or "Loja Saga"
+            nome_raw = l.get("loja_nome") or l.get("vc_empresa") or "Loja Saga"
+            # "SN GO BURITI" → "Primeira Mão GO BURITI"
+            nome = ("Primeira Mão " + nome_raw.strip()[3:]) if nome_raw.strip().upper().startswith("SN ") else nome_raw.strip()
             uf      = l.get("uf")         or l.get("vc_uf")             or "N/A"
             cidade  = l.get("vc_cidade")  or "N/A"
             agente  = l.get("agente_nome")         or ""

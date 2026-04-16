@@ -213,13 +213,26 @@ def _renderizar_card(v: dict, mostrar_placa: bool = False) -> str:
 
 # CTA embutido no final de qualquer lista de cards — garante que o cliente sempre veja as opções
 _CTA_OPCOES = (
-    "\n"
-    "**Gostou de algum veículo?** Escolha o que prefere fazer:\n\n"
-    "**1️⃣ Falar com um consultor Saga** — me informe seu **nome** e **telefone** "
-    "que registro seu interesse e um consultor entra em contato\n\n"
+    "\n---\n\n"
+    "**Algum desses veículos te interessou?** 😊\n\n"
+    "**1️⃣ Falar com consultor** — me diga seu **nome** e **telefone** que registro agora\n\n"
     "**2️⃣ Ver no site** — "
-    "[acesse o Livro de Ofertas Primeira Mão](https://www.primeiramaosaga.com.br/gradedeofertas) "
-    "para fotos completas, ficha técnica e simulação de financiamento"
+    "[Livro de Ofertas Primeira Mão](https://www.primeiramaosaga.com.br/gradedeofertas)"
+)
+
+_PROXIMA_ACAO_COMPRA = (
+    "Exibiu os cards acima. Agora pergunte ao cliente: "
+    "'Algum desses veículos te interessou? Se quiser, posso registrar seu interesse "
+    "e um consultor da Saga entra em contato — é só me informar seu nome e telefone!' "
+    "Se o cliente confirmar, colete nome e telefone e chame registrar_interesse_compra."
+)
+
+_PROXIMA_ACAO_VENDA = (
+    "Exibiu a proposta acima. Agora pergunte ao cliente: "
+    "'Gostaria de prosseguir com a venda? Se sim, posso registrar agora — "
+    "é só me informar seu nome e telefone!' "
+    "Se o cliente confirmar, colete nome e telefone e chame registrar_interesse_venda "
+    "passando placa, km e veiculo_descricao."
 )
 
 
@@ -440,17 +453,14 @@ async def estoque_total(
     Pergunte primeiro: "Em qual cidade você procura o veículo?"
     Só chame com o campo `cidade` preenchido. Aceita também UF (ex: "GO", "SP").
 
-    EXIBIÇÃO OBRIGATÓRIA: sua única saída ao cliente deve ser o valor exato do campo
-    `cards_markdown`, copiado palavra por palavra. NÃO resuma, NÃO categorize,
-    NÃO reformate e NÃO adicione texto próprio. Ignore todos os outros campos.
+    EXIBIÇÃO OBRIGATÓRIA: exiba o campo `cards_markdown` palavra por palavra.
+    NÃO resuma, NÃO categorize, NÃO reformate e NÃO adicione texto próprio.
 
-    LEAD DE COMPRA AUTOMÁTICO:
-      O cards_markdown já inclui as duas opções ao cliente.
-      Se o cliente escolher a opção 1️⃣ sem informar nome e telefone, pergunte:
-      "Pode me informar seu nome completo e telefone com DDD?"
-      Só re-chame a ferramenta quando tiver ambos.
-      Passe nome_cliente + telefone_cliente + dados do veículo (titulo_card, loja_unidade, plate, etc.).
-      O lead é criado internamente — não existe outra ferramenta para isso.
+    APÓS EXIBIR O MARKDOWN:
+      O campo `proxima_acao` contém a instrução exata do que perguntar ao cliente.
+      Execute-a imediatamente após exibir cards_markdown — não adicione texto próprio.
+      Se o cliente confirmar interesse: colete nome e telefone e chame `registrar_interesse_compra`
+      passando nome_cliente, telefone_cliente, titulo_veiculo, loja_unidade, preco_formatado.
     """
     # ── Lead automático: criação interna quando cliente confirma interesse ──
     if nome_cliente and telefone_cliente:
@@ -510,14 +520,13 @@ async def estoque_total(
         cards_md = _renderizar_cards(veiculos, aviso=aviso)
 
     return {
-        "cards_markdown": cards_md,
+        "cards_markdown":  cards_md,
+        "proxima_acao":    _PROXIMA_ACAO_COMPRA if veiculos else None,
         "_meta": {
             "total_veiculos": len(veiculos),
             "cidade":         cidade,
             "lojas_buscadas": nomes_lojas,
-            "fonte_lojas":    fonte,
-            "veiculos":       veiculos,
-            "nota":           "Bloco interno — NÃO exibir ao cliente.",
+            "nota":           "NÃO exibir ao cliente. Exiba APENAS cards_markdown.",
         },
     }
 
@@ -558,17 +567,14 @@ async def buscar_veiculo(
 
     Retorna no máximo 25 veículos com imagem.
 
-    EXIBIÇÃO OBRIGATÓRIA: sua única saída ao cliente deve ser o valor exato do campo
-    `cards_markdown`, copiado palavra por palavra. NÃO resuma, NÃO categorize,
-    NÃO reformate e NÃO adicione texto próprio. Ignore todos os outros campos.
+    EXIBIÇÃO OBRIGATÓRIA: exiba o campo `cards_markdown` palavra por palavra.
+    NÃO resuma, NÃO categorize, NÃO reformate e NÃO adicione texto próprio.
 
-    LEAD DE COMPRA AUTOMÁTICO:
-      O cards_markdown já inclui as duas opções ao cliente.
-      Se o cliente escolher a opção 1️⃣ sem informar nome e telefone, pergunte:
-      "Pode me informar seu nome completo e telefone com DDD?"
-      Só re-chame a ferramenta quando tiver ambos.
-      Passe nome_cliente + telefone_cliente + dados do veículo (titulo_card, loja_unidade, plate, preco_formatado, etc.).
-      O lead é criado internamente — não existe outra ferramenta para isso.
+    APÓS EXIBIR O MARKDOWN:
+      O campo `proxima_acao` contém a instrução exata do que perguntar ao cliente.
+      Execute-a imediatamente após exibir cards_markdown — não adicione texto próprio.
+      Se o cliente confirmar interesse: colete nome e telefone e chame `registrar_interesse_compra`
+      passando nome_cliente, telefone_cliente, titulo_veiculo, loja_unidade, preco_formatado.
     """
     # ── Lead automático: criação interna quando cliente confirma interesse ──
     if nome_cliente and telefone_cliente:
@@ -601,7 +607,8 @@ async def buscar_veiculo(
             logger.info(f"[buscar_veiculo] Fase 1 — encontrado por ID/placa")
             return {
                 "cards_markdown": _renderizar_cards([resultado_exato], mostrar_placa=True),
-                "_meta": {"total": 1, "veiculos": [resultado_exato], "nota": "Bloco interno — NÃO exibir ao cliente."},
+                "proxima_acao":   _PROXIMA_ACAO_COMPRA,
+                "_meta": {"total": 1, "nota": "NÃO exibir ao cliente. Exiba APENAS cards_markdown."},
             }
 
     # ── Carrega estoque: filtrado por cidade quando informada ──
@@ -632,7 +639,8 @@ async def buscar_veiculo(
         veiculos_and = [v for v in res_and if v.get("url_imagem")][:25]
         return {
             "cards_markdown": _renderizar_cards(veiculos_and, mostrar_placa=True),
-            "_meta": {"total": len(veiculos_and), "veiculos": veiculos_and, "nota": "Bloco interno — NÃO exibir ao cliente."},
+            "proxima_acao":   _PROXIMA_ACAO_COMPRA,
+            "_meta": {"total": len(veiculos_and), "nota": "NÃO exibir ao cliente. Exiba APENAS cards_markdown."},
         }
 
     # ── Fase 3: OR com ranking — ordena por quantos termos batem ──
@@ -650,7 +658,8 @@ async def buscar_veiculo(
         msg_or = f"Não encontramos exatamente \"{consulta}\", mas veja as opções mais próximas:"
         return {
             "cards_markdown": _renderizar_cards(res_or, mensagem=msg_or, mostrar_placa=True),
-            "_meta": {"total": len(res_or), "veiculos": res_or, "nota": "Bloco interno — NÃO exibir ao cliente."},
+            "proxima_acao":   _PROXIMA_ACAO_COMPRA,
+            "_meta": {"total": len(res_or), "nota": "NÃO exibir ao cliente. Exiba APENAS cards_markdown."},
         }
 
     # ── Fase 4: Sem nenhuma correspondência — retorna sugestões gerais ──
@@ -668,7 +677,8 @@ async def buscar_veiculo(
 
     return {
         "cards_markdown": cards_md_f4,
-        "_meta": {"total": len(sugestoes), "veiculos": sugestoes, "nota": "Bloco interno — NÃO exibir ao cliente."},
+        "proxima_acao":   _PROXIMA_ACAO_COMPRA if sugestoes else None,
+        "_meta": {"total": len(sugestoes), "nota": "NÃO exibir ao cliente. Exiba APENAS cards_markdown."},
     }
 
 
@@ -723,16 +733,14 @@ async def avaliar_veiculo(
     Todos os dados técnicos (versão, carroceria, combustível, valor FIPE, etc.)
     vêm automaticamente da FIPE pela placa — não pergunte nada disso.
 
-    OUTPUT: exiba o campo `proposta_markdown` diretamente ao usuário — já formatado com
-    o veículo, valor da proposta e as duas opções de ação (consultor OU site).
-    NÃO adicione texto depois da proposta — ela já inclui a pergunta ao cliente.
+    OUTPUT: exiba o campo `proposta_markdown` palavra por palavra. NÃO adicione texto próprio.
 
-    LEAD DE VENDA AUTOMÁTICO:
-      Quando o cliente escolher a opção 1️⃣ e informar nome + telefone,
-      chame avaliar_veiculo novamente passando placa, km E nome_cliente + telefone_cliente.
-      O lead é criado internamente — NÃO existe outra ferramenta para isso.
-      O retorno conterá o campo `lead` com registrado=true/false e mensagem de confirmação.
-      Fallback se lead.registrado=false: exiba `url_venda`.
+    APÓS EXIBIR O MARKDOWN:
+      O campo `proxima_acao` contém a instrução exata do que perguntar ao cliente.
+      Execute-a imediatamente após exibir proposta_markdown.
+      Se o cliente confirmar interesse: colete nome e telefone e chame `registrar_interesse_venda`
+      passando nome_cliente, telefone_cliente, placa, km, veiculo_descricao, valor_proposta.
+      Se registrado=false, exiba o link `url_venda` como alternativa.
       Se o cliente recusar → encerre sem chamar nenhuma ferramenta.
     """
     placa_limpa = normalizar_placa(placa)
@@ -810,6 +818,7 @@ async def avaliar_veiculo(
         logger.info(f"[avaliar_veiculo] Valor zerado | placa={placa_limpa} — orientando avaliação presencial")
         base = {
             "proposta_markdown":   proposta_md,
+            "proxima_acao":        _PROXIMA_ACAO_VENDA,
             "proposta_disponivel": False,
             "veiculo_descricao":   veiculo_descricao,
             "url_venda":           URL_VENDA,
@@ -849,6 +858,7 @@ async def avaliar_veiculo(
     logger.info(f"[avaliar_veiculo] Proposta gerada | placa={placa_limpa} | valor={valor_proposta}")
     base = {
         "proposta_markdown":     proposta_md,
+        "proxima_acao":          _PROXIMA_ACAO_VENDA,
         "proposta_disponivel":   True,
         "veiculo_descricao":     veiculo_descricao,
         "Valor_proposta_compra": valor_proposta,
@@ -874,6 +884,78 @@ async def avaliar_veiculo(
             observacao=observacao,
         )
     return base
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, openWorldHint=False, destructiveHint=False))
+async def registrar_interesse_compra(
+    nome_cliente: str,
+    telefone_cliente: str,
+    titulo_veiculo: Optional[str] = None,
+    loja_unidade: Optional[str] = None,
+    preco_formatado: Optional[str] = None,
+    plate: Optional[str] = None,
+    email_cliente: Optional[str] = None,
+    observacao: Optional[str] = None,
+):
+    """
+    Registra o interesse de compra do cliente e agenda contato de um consultor Saga.
+
+    Use esta ferramenta quando o cliente confirmar que quer ser contactado por um consultor
+    após ver os cards de veículos.
+
+    Campos obrigatórios: nome_cliente e telefone_cliente.
+    Passe também titulo_veiculo, loja_unidade e preco_formatado se souber — melhora o lead.
+
+    Retorna `registrado` (true/false) e `mensagem` para exibir ao cliente.
+    Se registrado=false, exiba o link `fallback_url` como alternativa.
+    """
+    logger.info(f"[registrar_interesse_compra] cliente='{nome_cliente}' | veiculo='{titulo_veiculo}' | loja='{loja_unidade}'")
+    return await _criar_lead_compra(
+        nome_cliente=nome_cliente,
+        telefone_cliente=telefone_cliente,
+        email_cliente=email_cliente or "",
+        titulo_card=titulo_veiculo,
+        preco_formatado=preco_formatado,
+        loja_unidade=loja_unidade,
+        plate=plate,
+        observacao=observacao,
+    )
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, openWorldHint=False, destructiveHint=False))
+async def registrar_interesse_venda(
+    nome_cliente: str,
+    telefone_cliente: str,
+    placa: Optional[str] = None,
+    km: Optional[str] = None,
+    veiculo_descricao: Optional[str] = None,
+    valor_proposta: Optional[str] = None,
+    email_cliente: Optional[str] = None,
+    observacao: Optional[str] = None,
+):
+    """
+    Registra o interesse de venda ou troca do veículo do cliente e agenda contato de um consultor Saga.
+
+    Use esta ferramenta quando o cliente confirmar que quer prosseguir com a venda
+    ou troca do veículo (opção 1️⃣ após avaliar_veiculo).
+
+    Campos obrigatórios: nome_cliente e telefone_cliente.
+    Passe placa, km e veiculo_descricao se disponíveis — melhora o lead.
+
+    Retorna `registrado` (true/false) e `mensagem` para exibir ao cliente.
+    Se registrado=false, exiba o link `fallback_url` como alternativa.
+    """
+    logger.info(f"[registrar_interesse_venda] cliente='{nome_cliente}' | placa={placa} | km={km} | veiculo='{veiculo_descricao}'")
+    return await _criar_lead_venda(
+        nome_cliente=nome_cliente,
+        telefone_cliente=telefone_cliente,
+        email_cliente=email_cliente or "",
+        placa=placa,
+        km=km,
+        veiculo_descricao=veiculo_descricao,
+        valor_proposta=valor_proposta,
+        observacao=observacao,
+    )
 
 
 if __name__ == "__main__":

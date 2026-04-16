@@ -214,9 +214,10 @@ def _renderizar_card(v: dict, mostrar_placa: bool = False) -> str:
 # CTA embutido no final de qualquer lista de cards — garante que o cliente sempre veja as opções
 _CTA_OPCOES = (
     "\n---\n\n"
-    "**Algum desses veículos te interessou?** 😊\n\n"
-    "**1️⃣ Falar com consultor** — me diga seu **nome** e **telefone** que registro agora\n\n"
-    "**2️⃣ Ver no site** — "
+    "**Gostou de algum veículo?** 😊\n\n"
+    "📲 **Falar com um consultor Saga** — informe seu **nome** e **telefone** e um consultor "
+    "**entra em contato com você via WhatsApp** para ajudar na compra.\n\n"
+    "Ou explore mais opções diretamente: "
     "[Livro de Ofertas Primeira Mão](https://www.primeiramaosaga.com.br/gradedeofertas)"
 )
 
@@ -302,10 +303,11 @@ async def _criar_lead_compra(
         "dealer_id":    resultado.get("dealer_id"),
         "fallback_url": "https://www.primeiramaosaga.com.br/gradedeofertas",
         "mensagem": (
-            f"Lead de compra criado com sucesso para {nome_cliente}."
+            f"Pronto, {nome_cliente}! Um consultor da Saga entrará em contato com você em breve via WhatsApp. "
+            f"Fique atento ao número informado."
             if resultado.get("success") else
-            f"Falha ao criar lead no CRM: {resultado.get('error', 'erro desconhecido')}. "
-            "Use o link do site como alternativa."
+            f"Não foi possível registrar agora: {resultado.get('error', 'erro desconhecido')}. "
+            "Acesse o site como alternativa."
         ),
     }
 
@@ -372,10 +374,11 @@ async def _criar_lead_venda(
         "dealer_id":    resultado.get("dealer_id"),
         "fallback_url": "https://www.primeiramaosaga.com.br/vender/avaliar-veiculo/cliente",
         "mensagem": (
-            f"Lead de venda criado com sucesso para {nome_cliente}."
+            f"Pronto, {nome_cliente}! Um consultor da Saga entrará em contato com você em breve via WhatsApp "
+            f"para prosseguir com a avaliação. Fique atento ao número informado."
             if resultado.get("success") else
-            f"Falha ao criar lead no CRM: {resultado.get('error', 'erro desconhecido')}. "
-            "Use o link de venda online como alternativa."
+            f"Não foi possível registrar agora: {resultado.get('error', 'erro desconhecido')}. "
+            "Acesse o link de avaliação online como alternativa."
         ),
     }
 
@@ -425,9 +428,10 @@ async def estoque_total(cidade: Optional[str] = None):
     incluindo todas as linhas de imagem (![...](...)) e de preço. NÃO resuma, NÃO categorize,
     NÃO reformate e NÃO adicione texto próprio.
 
-    Após exibir: se o cliente confirmar interesse em algum veículo, colete nome e telefone
-    e chame `registrar_interesse_compra` com nome_cliente, telefone_cliente, titulo_veiculo,
-    loja_unidade e preco_formatado.
+    Após exibir: o cliente pode informar nome e telefone para falar com um consultor.
+    O CONSULTOR ENTRA EM CONTATO COM O CLIENTE — deixe isso claro.
+    Quando o cliente informar, chame `registrar_interesse_compra` com nome_cliente,
+    telefone_cliente, titulo_veiculo, loja_unidade e preco_formatado.
     """
     if not cidade or not cidade.strip():
         return (
@@ -488,9 +492,10 @@ async def buscar_veiculo(
     incluindo todas as linhas de imagem (![...](...)) e de preço. NÃO resuma, NÃO categorize,
     NÃO reformate e NÃO adicione texto próprio.
 
-    Após exibir: se o cliente confirmar interesse em algum veículo, colete nome e telefone
-    e chame `registrar_interesse_compra` com nome_cliente, telefone_cliente, titulo_veiculo,
-    loja_unidade e preco_formatado.
+    Após exibir: o cliente pode informar nome e telefone para falar com um consultor.
+    O CONSULTOR ENTRA EM CONTATO COM O CLIENTE — deixe isso claro.
+    Quando o cliente informar, chame `registrar_interesse_compra` com nome_cliente,
+    telefone_cliente, titulo_veiculo, loja_unidade e preco_formatado.
     """
     if not consulta or not consulta.strip():
         return await estoque_total(cidade=cidade)
@@ -609,9 +614,11 @@ async def avaliar_veiculo(
     EXIBIÇÃO OBRIGATÓRIA: copie e cole o resultado desta ferramenta palavra por palavra.
     NÃO adicione texto próprio.
 
-    Após exibir: se o cliente confirmar interesse (opção 1️⃣), colete nome e telefone
-    e chame `registrar_interesse_venda` com nome_cliente, telefone_cliente, placa, km
-    e veiculo_descricao (ex: "Honda Civic 2021"). Se o cliente recusar → encerre.
+    Após exibir: o cliente pode informar nome e telefone para falar com um consultor.
+    O CONSULTOR ENTRA EM CONTATO COM O CLIENTE — deixe isso claro.
+    Quando o cliente informar, chame `registrar_interesse_venda` com nome_cliente,
+    telefone_cliente, placa, km e veiculo_descricao (ex: "Honda Civic 2021").
+    Se o cliente recusar → encerre sem chamar nenhuma ferramenta.
     """
     placa_limpa = normalizar_placa(placa)
     logger.info(f"[avaliar_veiculo] Chamada iniciada | placa={placa_limpa} | km={km} | uf={uf} | cor={cor} | existe_zero_km={existe_zero_km}")
@@ -680,11 +687,10 @@ async def avaliar_veiculo(
             f"---\n\n"
             f"Não foi possível gerar uma proposta automática para este veículo. "
             f"A avaliação precisa ser feita presencialmente.\n\n"
-            f"**O que deseja fazer?**\n\n"
-            f"**1️⃣ Falar com um consultor** — me informe seu **nome** e **telefone** "
-            f"que agendamos a avaliação presencial\n\n"
-            f"**2️⃣ Iniciar pelo site** — "
-            f"[acesse aqui para avaliação online](https://www.primeiramaosaga.com.br/vender/avaliar-veiculo/cliente)"
+            f"📲 **Falar com um consultor Saga** — informe seu **nome** e **telefone** "
+            f"e um consultor **entra em contato com você via WhatsApp** para agendar a avaliação presencial.\n\n"
+            f"Ou se preferir iniciar pelo site: "
+            f"[avaliação online](https://www.primeiramaosaga.com.br/vender/avaliar-veiculo/cliente)"
         )
 
     preco_fmt = f"R$ {valor_proposta}"
@@ -696,11 +702,10 @@ async def avaliar_veiculo(
         f"## 💰 Proposta Saga Primeira Mão\n\n"
         f"### {preco_fmt}\n\n"
         f"---\n\n"
-        f"**O que deseja fazer?**\n\n"
-        f"**1️⃣ Confirmar venda com consultor** — me informe seu **nome** e **telefone** "
-        f"que um consultor entra em contato para fechar\n\n"
-        f"**2️⃣ Iniciar pelo site** — "
-        f"[acesse aqui para avaliação online](https://www.primeiramaosaga.com.br/vender/avaliar-veiculo/cliente)"
+        f"📲 **Fechar com um consultor Saga** — informe seu **nome** e **telefone** "
+        f"e um consultor **entra em contato com você via WhatsApp** para concluir a venda.\n\n"
+        f"Ou se preferir iniciar pelo site: "
+        f"[avaliação online](https://www.primeiramaosaga.com.br/vender/avaliar-veiculo/cliente)"
     )
 
 
@@ -716,15 +721,15 @@ async def registrar_interesse_compra(
     observacao: Optional[str] = None,
 ):
     """
-    Registra o interesse de compra do cliente e agenda contato de um consultor Saga.
+    Registra o interesse de compra do cliente. Um consultor da Saga entrará em contato
+    com o cliente pelo telefone informado — NÃO é o cliente que liga para a loja.
 
-    Use esta ferramenta quando o cliente confirmar que quer ser contactado por um consultor
-    após ver os cards de veículos.
+    Use quando o cliente informar nome e telefone após ver os cards de veículos.
 
     Campos obrigatórios: nome_cliente e telefone_cliente.
-    Passe também titulo_veiculo, loja_unidade e preco_formatado se souber — melhora o lead.
+    Passe titulo_veiculo, loja_unidade e preco_formatado se souber — melhora o lead.
 
-    Retorna `registrado` (true/false) e `mensagem` para exibir ao cliente.
+    Após chamar: exiba o campo `mensagem` ao cliente (confirma que o consultor ligará).
     Se registrado=false, exiba o link `fallback_url` como alternativa.
     """
     logger.info(f"[registrar_interesse_compra] cliente='{nome_cliente}' | veiculo='{titulo_veiculo}' | loja='{loja_unidade}'")
@@ -752,15 +757,15 @@ async def registrar_interesse_venda(
     observacao: Optional[str] = None,
 ):
     """
-    Registra o interesse de venda ou troca do veículo do cliente e agenda contato de um consultor Saga.
+    Registra o interesse de venda ou troca do veículo do cliente. Um consultor da Saga
+    entrará em contato com o cliente pelo telefone informado — NÃO é o cliente que liga.
 
-    Use esta ferramenta quando o cliente confirmar que quer prosseguir com a venda
-    ou troca do veículo (opção 1️⃣ após avaliar_veiculo).
+    Use quando o cliente informar nome e telefone após ver a proposta de avaliar_veiculo.
 
     Campos obrigatórios: nome_cliente e telefone_cliente.
     Passe placa, km e veiculo_descricao se disponíveis — melhora o lead.
 
-    Retorna `registrado` (true/false) e `mensagem` para exibir ao cliente.
+    Após chamar: exiba o campo `mensagem` ao cliente (confirma que o consultor ligará).
     Se registrado=false, exiba o link `fallback_url` como alternativa.
     """
     logger.info(f"[registrar_interesse_venda] cliente='{nome_cliente}' | placa={placa} | km={km} | veiculo='{veiculo_descricao}'")

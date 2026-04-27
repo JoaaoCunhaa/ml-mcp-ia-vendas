@@ -56,6 +56,15 @@
   /** Modo local: mostra erro real do servidor no card (além do painel de debug). */
   var LOCAL = /[?&]local=1/.test(window.location.search) || DBG;
 
+  /**
+   * Base URL da API — absoluta quando o widget é carregado via ui:// resource pelo
+   * ChatGPT (sem hostname real); relativa quando carregado como HTTPS normal.
+   */
+  var _API_BASE = (
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1'
+  ) ? '' : 'https://mcp-primeiramao.sagadatadriven.com.br';
+
   /* ════════════════════════════════════════════════════════════════════
      DEBUG — painel de logs visível apenas com ?debug=1
      ════════════════════════════════════════════════════════════════════ */
@@ -1508,6 +1517,31 @@
     if (!isTrustedOrigin(ev.origin)) return;
     if (!ev.data || typeof ev.data !== 'object') return;
 
+    /* JSON-RPC 2.0 — OpenAI Apps SDK: resultado da tool após execução */
+    if (ev.data.jsonrpc === '2.0' && ev.data.method === 'ui/notifications/tool-result') {
+      dbgLog('← tool-result', ev.data.params);
+      if (APP.data) return; /* widget já renderizou — ignora */
+      var sc = ev.data.params && ev.data.params.structuredContent;
+      if (!sc || typeof sc !== 'object') return;
+      if (sc.mode === 'sell') {
+        var propStr2 = String(sc.proposta || '').trim();
+        if (propStr2 && propStr2.indexOf('R$') === -1) propStr2 = 'R$ ' + propStr2;
+        render({
+          mode: 'sell',
+          evaluation: {
+            vehicleDescription: String(sc.veiculo || ''),
+            plate:              String(sc.placa    || ''),
+            km:                 String(sc.km       || ''),
+            kmFormatted:        sc.km_fmt || fmtKm(sc.km) || '',
+            proposal:           propStr2,
+          },
+          searchContext: { city: 'GOIÂNIA/GO' },
+        }, {});
+      }
+      /* Modo compra: a fetch da API já foi iniciada via toolInput em waitForData(). */
+      return;
+    }
+
     var type = ev.data.type;
 
     if (type === 'MCP_INITIAL_DATA' && ev.data.data && typeof ev.data.data === 'object') {
@@ -1560,27 +1594,76 @@
       window.location.hostname === 'localhost' ||
       window.location.hostname === '127.0.0.1'
     );
-    var params   = new URLSearchParams(window.location.search);
-    var isSell   = params.get('mode') === 'sell';
+    var params    = new URLSearchParams(window.location.search);
+    var toolInput = (window.openai && window.openai.toolInput && typeof window.openai.toolInput === 'object')
+      ? window.openai.toolInput : null;
+    dbgLog('toolInput', toolInput);
+
     var apiUrl;
 
-    if (isSell && isLocal) {
-      /* Formulário de venda: apenas local */
-      apiUrl = '/local/formulario-venda';
-      var sellQ = [];
-      if (params.get('veiculo'))  sellQ.push('veiculo='  + encodeURIComponent(params.get('veiculo')));
-      if (params.get('placa'))    sellQ.push('placa='    + encodeURIComponent(params.get('placa')));
-      if (params.get('km'))       sellQ.push('km='       + encodeURIComponent(params.get('km')));
-      if (params.get('proposta')) sellQ.push('proposta=' + encodeURIComponent(params.get('proposta')));
-      if (sellQ.length) apiUrl += '?' + sellQ.join('&');
-    } else if (!isSell) {
-      /* Carrossel de compra — funciona local e produção */
+    /* ── Modo venda via window.openai.toolInput (contexto ui:// do ChatGPT) ── */
+    if (toolInput && (toolInput.veiculo_descricao || toolInput.valor_proposta)) {
+      var propStrTI = String(toolInput.valor_proposta || '').trim();
+      if (propStrTI && propStrTI.indexOf('R$') === -1) propStrTI = 'R$ ' + propStrTI;
+      var sellDataTI = {
+        mode: 'sell',
+        evaluation: {
+          vehicleDescription: String(toolInput.veiculo_descricao || ''),
+          plate:              String(toolInput.placa             || ''),
+          km:                 String(toolInput.km                || ''),
+          kmFormatted:        String(toolInput.km                || ''),
+          proposal:           propStrTI,
+        },
+        searchContext: { city: 'GOIÂNIA/GO' },
+      };
+      done = true;
+      clearTimeout(timeout);
+      render(sellDataTI, {});
+      return;
+    }
+
+    /* ── Modo venda via URL params (HTTPS URL com ?mode=sell) ── */
+    var isSell = params.get('mode') === 'sell';
+
+    if (isSell) {
+      var sellData = {
+        mode: 'sell',
+        evaluation: {
+          vehicleDescription: params.get('veiculo')  || '',
+          plate:              params.get('placa')    || '',
+          km:                 params.get('km')       || '',
+          kmFormatted:        params.get('km_fmt')   || params.get('km') || '',
+          proposal:           params.get('proposta') || '',
+        },
+        searchContext: { city: params.get('cidade') || 'GOIÂNIA/GO' },
+      };
+      done = true;
+      clearTimeout(timeout);
+      render(sellData, {});
+      return;
+    }
+
+    /* ── Modo compra via window.openai.toolInput (contexto ui://) ── */
+    if (toolInput && toolInput.cidade) {
+      var cidadeTI   = String(toolInput.cidade   || 'Goiânia');
+      var consultaTI = String(toolInput.consulta || '');
+      var baseTI = isLocal ? '/local/ofertas' : (_API_BASE + '/api/ofertas');
+      apiUrl = baseTI + '?cidade=' + encodeURIComponent(cidadeTI);
+      if (consultaTI) apiUrl += '&consulta=' + encodeURIComponent(consultaTI);
+      var tiKeys = ['marca', 'modelo', 'versao', 'preco_min', 'preco_max', 'km_max', 'ano_min', 'ano_max'];
+      for (var _tfi = 0; _tfi < tiKeys.length; _tfi++) {
+        var _tfv = toolInput[tiKeys[_tfi]];
+        if (_tfv != null && String(_tfv).trim()) {
+          apiUrl += '&' + tiKeys[_tfi] + '=' + encodeURIComponent(String(_tfv));
+        }
+      }
+    } else {
+      /* ── Modo compra via URL params (HTTPS URL com ?cidade=...) ── */
       var cidade   = params.get('cidade')  || 'Goiânia';
       var consulta = params.get('consulta') || '';
-      var baseEndpoint = isLocal ? '/local/ofertas' : '/api/ofertas';
+      var baseEndpoint = isLocal ? '/local/ofertas' : (_API_BASE + '/api/ofertas');
       apiUrl = baseEndpoint + '?cidade=' + encodeURIComponent(cidade);
       if (consulta) apiUrl += '&consulta=' + encodeURIComponent(consulta);
-      /* Repassa filtros da URL para o endpoint (marca, modelo, versao, preco_*, km_max, ano_*) */
       var filterKeys = ['marca', 'modelo', 'versao', 'preco_min', 'preco_max', 'km_max', 'ano_min', 'ano_max'];
       for (var _fi = 0; _fi < filterKeys.length; _fi++) {
         var _fv = params.get(filterKeys[_fi]);

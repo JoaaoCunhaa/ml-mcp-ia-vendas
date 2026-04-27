@@ -14,6 +14,7 @@ import httpx
 from typing import Optional
 from fastmcp import FastMCP
 from fastmcp.tools.tool import ToolResult as _ToolResult
+from fastmcp.server.apps import AppConfig, ResourceCSP
 from mcp.types import ToolAnnotations, TextContent
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, FileResponse, Response, JSONResponse
@@ -33,6 +34,30 @@ _WIDGET_URL  = os.getenv("WIDGET_URL", "https://mcp-primeiramao.sagadatadriven.c
 # Desabilita fallback Mobiauto — usa apenas Lambda AWS como fonte de estoque.
 # Para reativar o fallback, mude para False.
 _LAMBDA_APENAS = True
+
+# AppConfig para buscar_veiculos — coloca _meta.ui no descritor da tool,
+# indicando ao ChatGPT qual recurso MCP carregar como widget (ui://vehicle-offers).
+_APP_COMPRA = AppConfig(
+    resource_uri="ui://vehicle-offers",
+    prefers_border=True,
+    csp=ResourceCSP(
+        connect_domains=["https://mcp-primeiramao.sagadatadriven.com.br"],
+        resource_domains=[
+            "https://mcp-primeiramao.sagadatadriven.com.br",
+            "https://images.primeiramaosaga.com.br",
+            "https://www.primeiramaosaga.com.br",
+        ],
+    ),
+)
+
+_APP_VENDA = AppConfig(
+    resource_uri="ui://vehicle-offers",
+    prefers_border=True,
+    csp=ResourceCSP(
+        connect_domains=["https://mcp-primeiramao.sagadatadriven.com.br"],
+        resource_domains=["https://mcp-primeiramao.sagadatadriven.com.br"],
+    ),
+)
 
 async def _disparar_webhook(url: str, payload: dict, nome: str) -> bool:
     """Envia POST para o webhook interno. Aguarda confirmação antes de retornar."""
@@ -112,6 +137,19 @@ async def _serve_ui_css(request: Request) -> Response:
 @mcp.custom_route("/ui/vehicle-offers.js", methods=["GET"])
 async def _serve_ui_js(request: Request) -> Response:
     return _serve_ui_file("vehicle-offers.js")
+
+
+@mcp.resource("ui://vehicle-offers", mime_type="text/html")
+async def _resource_vehicle_offers() -> str:
+    """HTML do widget de veículos — carregado como recurso MCP pelo ChatGPT Apps."""
+    with open(os.path.join(_UI_DIR, "vehicle-offers.html"), "r", encoding="utf-8") as f:
+        html = f.read()
+    # Substitui refs relativas por URLs absolutas — necessário quando o recurso
+    # é carregado via ui:// (sem base URL do servidor HTTPS).
+    base = "https://mcp-primeiramao.sagadatadriven.com.br"
+    html = html.replace('href="vehicle-offers.css"', f'href="{base}/ui/vehicle-offers.css"')
+    html = html.replace('src="vehicle-offers.js"',   f'src="{base}/ui/vehicle-offers.js"')
+    return html
 
 
 async def _buscar_ofertas_json(cidade: str, consulta: str | None, filtros: dict | None = None) -> dict:
@@ -719,21 +757,10 @@ async def listar_lojas():
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True, destructiveHint=False))
 async def estoque_total(cidade: Optional[str] = None):
     """
-    Exibe até 25 veículos disponíveis nas lojas Primeira Mão Saga da cidade informada.
+    NÃO USE — use `buscar_veiculos` (com 's') para exibir o widget visual de veículos.
 
-    ANTES de chamar: se o cliente não informou a cidade, NÃO chame esta ferramenta.
-    Pergunte primeiro: "Em qual cidade você procura o veículo?"
-    Só chame com o campo `cidade` preenchido. Aceita também UF (ex: "GO", "SP").
-
-    EXIBIÇÃO OBRIGATÓRIA: copie e cole o resultado desta ferramenta palavra por palavra,
-    incluindo todas as linhas de imagem (![...](...)) e de preço. NÃO resuma, NÃO categorize,
-    NÃO reformate e NÃO adicione texto próprio.
-
-    Após exibir: aguarde o cliente informar nome e telefone.
-    QUANDO O CLIENTE FORNECER NOME E TELEFONE: chame IMEDIATAMENTE `registrar_interesse_compra`
-    com nome_cliente, telefone_cliente, titulo_veiculo, loja_unidade e preco_formatado.
-    NÃO mostre link, NÃO resuma os dados recebidos, NÃO peça confirmação — chame a ferramenta.
-    O consultor entra em contato via WhatsApp — NÃO é o cliente que liga.
+    Esta ferramenta existe apenas para compatibilidade interna.
+    Para qualquer listagem de carros, use `buscar_veiculos` com o parâmetro `cidade`.
     """
     if not cidade or not cidade.strip():
         return (
@@ -775,30 +802,13 @@ async def buscar_veiculo(
     cidade: Optional[str] = None,
 ):
     """
-    Busca curinga: encontra veículos a partir de qualquer descrição em linguagem natural.
-    Exemplos: "quero um corolla branco 2019", "hb20 prata", "abc1234", "SUV abaixo de 80 mil",
-              "quero comprar uma xre 2024", "toyota abaixo de 150 mil".
+    NÃO USE PARA COMPRA DE VEÍCULOS — use `buscar_veiculos` (com 's') para isso.
 
-    ANTES de chamar: se a mensagem já contém cidade ou UF, extraia e passe em `cidade`.
-    Se não contém, pergunte: "Em qual cidade você busca esse veículo?" antes de chamar.
+    Esta ferramenta é reservada para busca por ID ou placa exata de um veículo específico
+    já mencionado na conversa (ex: "me mostra detalhes do ABC1234").
 
-    Estratégia em 4 fases — NUNCA retorna vazio:
-      1. ID ou placa exata → busca direta em todas as lojas.
-      2. Todos os termos batem (AND) → resultado preciso.
-      3. Parte dos termos bate (OR, ordenado por relevância) → similares.
-      4. Nenhum termo bate → sugestões do estoque disponível.
-
-    Retorna no máximo 25 veículos com imagem.
-
-    EXIBIÇÃO OBRIGATÓRIA: copie e cole o resultado desta ferramenta palavra por palavra,
-    incluindo todas as linhas de imagem (![...](...)) e de preço. NÃO resuma, NÃO categorize,
-    NÃO reformate e NÃO adicione texto próprio.
-
-    Após exibir: aguarde o cliente informar nome e telefone.
-    QUANDO O CLIENTE FORNECER NOME E TELEFONE: chame IMEDIATAMENTE `registrar_interesse_compra`
-    com nome_cliente, telefone_cliente, titulo_veiculo, loja_unidade e preco_formatado.
-    NÃO mostre link, NÃO resuma os dados recebidos, NÃO peça confirmação — chame a ferramenta.
-    O consultor entra em contato via WhatsApp — NÃO é o cliente que liga.
+    Para qualquer pedido de compra, marca, modelo ou listagem de carros:
+    CHAME `buscar_veiculos` diretamente, sem perguntas.
     """
     if not consulta or not consulta.strip():
         return await estoque_total(cidade=cidade)
@@ -870,7 +880,7 @@ async def buscar_veiculo(
     return _renderizar_cards(sugestoes, mensagem=msg_f4, mostrar_placa=True)
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True, destructiveHint=False))
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True, destructiveHint=False), app=_APP_COMPRA)
 async def buscar_veiculos(
     cidade: str,
     consulta: Optional[str] = None,
@@ -887,24 +897,33 @@ async def buscar_veiculos(
     """
     Exibe o widget visual interativo com cards de veículos seminovos (fotos, preço, botão de contato).
 
-    USE ESTA FERRAMENTA sempre que o cliente quiser VER veículos:
-    "quero ver carros", "tem corolla?", "mostre opções em Brasília", "HB20 abaixo de R$60.000", etc.
+    CHAME IMEDIATAMENTE, sem fazer perguntas, sempre que o cliente:
+    - Mencionar que quer comprar ou ver carros em alguma cidade
+    - Citar uma marca, modelo, tipo ou faixa de preço
+    - Responder a qualquer pergunta de filtro (marca, modelo, etc.)
 
-    ANTES de chamar: `cidade` é obrigatório. Se não informada, pergunte antes.
+    ÚNICO caso para perguntar antes: `cidade` não foi mencionada em nenhum momento
+    da conversa. Se já foi citada (mesmo que em mensagem anterior), use-a e chame agora.
 
-    Parâmetros de filtro (todos opcionais — use quando o cliente especificar):
-    - consulta:  texto livre (ex: "suv prata", "1.0 turbo")
-    - marca:     fabricante  (ex: "Volkswagen", "Hyundai")
-    - modelo:    modelo      (ex: "Gol", "Creta", "HB20")
-    - versao:    versão/trim (ex: "Sport", "1.6 MSI")
-    - preco_min: preço mínimo em R$ (ex: 50000)
-    - preco_max: preço máximo em R$ (ex: 80000)
-    - km_max:    quilometragem máxima (ex: 50000)
-    - ano_min:   ano mínimo do veículo (ex: 2020)
-    - ano_max:   ano máximo do veículo (ex: 2024)
+    NÃO faça perguntas de confirmação. NÃO espere o cliente informar todos os filtros.
+    Chame com o que já foi informado e deixe o widget mostrar as opções.
 
-    EXIBIÇÃO: o widget visual é renderizado automaticamente pelo ChatGPT.
-    Após exibir: aguarde nome e telefone, depois chame `registrar_interesse_compra`.
+    Exemplos — chame imediatamente:
+    "quero um carro em Goiânia"            → buscar_veiculos(cidade="Goiânia")
+    "tem Polo?" (cidade já mencionada)     → buscar_veiculos(cidade="Goiânia", modelo="Polo")
+    "Volkswagen Polo" após cidade conhecida → buscar_veiculos(cidade="Goiânia", marca="Volkswagen", modelo="Polo")
+    "HB20 até 60 mil em Brasília"          → buscar_veiculos(cidade="Brasília", modelo="HB20", preco_max=60000)
+
+    Filtros opcionais (use apenas quando o cliente já tiver informado — sem perguntar):
+    - consulta:  texto livre ("suv prata", "1.0 turbo")
+    - marca:     fabricante ("Volkswagen", "Hyundai")
+    - modelo:    ("Polo", "HB20", "Creta")
+    - versao:    versão/trim ("Sport", "1.6 MSI")
+    - preco_min / preco_max: faixa de preço em R$
+    - km_max:    quilometragem máxima
+    - ano_min / ano_max: faixa de ano
+
+    Após o widget ser exibido: aguarde nome e telefone e chame `registrar_interesse_compra`.
     """
     if not cidade or not cidade.strip():
         return "Informe a cidade para buscar veículos."
@@ -951,8 +970,9 @@ async def buscar_veiculos(
 
     logger.info(f"[buscar_veiculos] → widget | n={n} | url={widget_url}")
 
-    # Retorna ToolResult com meta → FastMCP serializa como _meta no protocolo MCP,
-    # que o ChatGPT Apps SDK usa para renderizar o iframe do widget.
+    # _meta.ui.resourceUri já está no descritor da tool (via AppConfig no decorator).
+    # O ChatGPT usa isso para carregar ui://vehicle-offers e injeta os args via
+    # window.openai.toolInput. O structured_content chega via ui/notifications/tool-result.
     return _ToolResult(
         content=TextContent(type="text", text=texto),
         structured_content={
@@ -960,25 +980,10 @@ async def buscar_veiculos(
             "consulta": consulta or "",
             **{k: str(v) for k, v in filtros.items()},
         },
-        meta={
-            "openai/outputTemplate": widget_url,
-            "openai/widgetDescription": "Cards interativos de veículos seminovos Primeira Mão Saga.",
-            "openai/widgetPrefersBorder": True,
-            "openai/widgetCSP": {
-                "connect_domains": [
-                    "https://mcp-primeiramao.sagadatadriven.com.br",
-                ],
-                "resource_domains": [
-                    "https://mcp-primeiramao.sagadatadriven.com.br",
-                    "https://images.primeiramaosaga.com.br",
-                    "https://www.primeiramaosaga.com.br",
-                ],
-            },
-        },
     )
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False, destructiveHint=False))
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False, destructiveHint=False), app=_APP_VENDA)
 async def exibir_formulario_venda(
     veiculo_descricao: str,
     placa: Optional[str] = None,
@@ -1003,25 +1008,40 @@ async def exibir_formulario_venda(
     if proposta_str and not proposta_str.startswith("R$"):
         proposta_str = f"R$ {proposta_str}"
 
+    km_fmt = _fmt_km(km) if km else ""
+
     logger.info(
         f"[exibir_formulario_venda] veiculo='{veiculo_descricao}' | placa={placa} | "
         f"km={km} | proposta='{proposta_str}'"
     )
 
-    return {
-        "mode": "sell",
-        "evaluation": {
-            "vehicleDescription": veiculo_descricao,
-            "plate":              placa or "",
-            "km":                 km or "",
-            "kmFormatted":        _fmt_km(km) if km else "",
-            "proposal":           proposta_str,
+    # Passa todos os dados de avaliação como URL params — o widget lê direto,
+    # sem precisar de chamada de API (funciona em produção e em iframe no ChatGPT).
+    url_params: dict = {"mode": "sell", "veiculo": veiculo_descricao}
+    if placa:        url_params["placa"]    = placa
+    if km:           url_params["km"]       = km
+    if km_fmt:       url_params["km_fmt"]   = km_fmt
+    if proposta_str: url_params["proposta"] = proposta_str
+
+    widget_url = _WIDGET_URL + "?" + urllib.parse.urlencode(url_params)
+
+    texto = (
+        f"Proposta Saga de {proposta_str} para {veiculo_descricao}. Formulário de contato exibido."
+        if proposta_str else
+        f"Formulário de avaliação exibido para {veiculo_descricao}."
+    )
+
+    return _ToolResult(
+        content=TextContent(type="text", text=texto),
+        structured_content={
+            "mode":     "sell",
+            "veiculo":  veiculo_descricao,
+            "placa":    placa or "",
+            "km":       km or "",
+            "km_fmt":   km_fmt,
+            "proposta": proposta_str,
         },
-        "searchContext": {
-            "city": "GOIÂNIA/GO",
-        },
-        "$display": _WIDGET_URL,
-    }
+    )
 
 
 # ─────────────────────────────────────────────────────────────

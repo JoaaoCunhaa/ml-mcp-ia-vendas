@@ -2,7 +2,7 @@ version: "3.9"
 
 services:
   mcp-primeira-mao:
-    image: mcpprimeiramao:v1
+    image: mcp-primeira-mao:v3.0.3
     networks:
       - network_public
     environment:
@@ -14,7 +14,7 @@ services:
       - DB_NAME=${DB_NAME}
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
-      - DB_PORT=${DB_PORT:-5432}      # padrão postgres; ajuste se usar 5435
+      - DB_PORT=${DB_PORT:-5432}
       # Integrações externas
       - MOBI_SECRET=${MOBI_SECRET}
       - URL_AWS_TOKEN=${URL_AWS_TOKEN}
@@ -22,36 +22,29 @@ services:
       - API_TIMEOUT=${API_TIMEOUT:-20}
       # ChatGPT Apps — verificação de domínio OpenAI
       - OPENAI_CHALLENGE_TOKEN=${OPENAI_CHALLENGE_TOKEN}
+      # Lambda de estoque (fonte primária do widget)
+      - LAMBDA_ESTOQUE_URL=${LAMBDA_ESTOQUE_URL}
+      - LAMBDA_API_KEY=${LAMBDA_API_KEY}
     deploy:
       replicas: 1
       placement:
         constraints:
-          # Fixe no node onde a imagem foi construída.
-          # Descubra o hostname na aba "Nodes" do Portainer e substitua abaixo.
-          - node.hostname == NOME_DO_NODE
+          - node.hostname == maiamanager
       restart_policy:
         condition: on-failure
         delay: 5s
         max_attempts: 3
       labels:
-        # --- Roteamento básico ---
-        - "traefik.enable=true"
-        - "traefik.http.routers.mcp-saga.rule=Host(`mcp-saga.seudominio.com.br`)"
-        - "traefik.http.routers.mcp-saga.entrypoints=websecure"
-        - "traefik.http.routers.mcp-saga.tls=true"
-        - "traefik.http.routers.mcp-saga.tls.certresolver=letsencrypt"
-        - "traefik.http.services.mcp-saga.loadbalancer.server.port=8000"
+        - traefik.enable=true
+        - traefik.http.routers.mcp-saga.rule=Host(`mcp-primeiramao.sagadatadriven.com.br`)
+        - traefik.http.routers.mcp-saga.entrypoints=websecure
+        - traefik.http.routers.mcp-saga.tls.certresolver=letsencryptresolver
+        - traefik.http.routers.mcp-saga.service=mcp-saga
+        - traefik.http.services.mcp-saga.loadbalancer.server.port=8000
+        - traefik.http.services.mcp-saga.loadbalancer.passHostHeader=1
 
-        # --- Encadeia o middleware de segurança ---
-        - "traefik.http.routers.mcp-saga.middlewares=mcp-saga-headers@docker"
-
-        # --- Middleware: Security Headers (substitui o código Python removido) ---
-        - "traefik.http.middlewares.mcp-saga-headers.headers.contentSecurityPolicy=default-src 'self'; img-src 'self' data: https://*.mobiauto.com.br; frame-ancestors 'none'; upgrade-insecure-requests;"
-        - "traefik.http.middlewares.mcp-saga-headers.headers.frameDeny=true"
-        - "traefik.http.middlewares.mcp-saga-headers.headers.contentTypeNosniff=true"
-        - "traefik.http.middlewares.mcp-saga-headers.headers.stsSeconds=31536000"
-        - "traefik.http.middlewares.mcp-saga-headers.headers.stsIncludeSubdomains=true"
-        - "traefik.http.middlewares.mcp-saga-headers.headers.forceSTSHeader=true"
+        #- "traefik.http.middlewares.mcp-auth.basicauth.users=maiamcp:$$2y$$10$$UgcXHrEHL3vjMZE35I7Q5.PFHavcdZOwUnMu88uj3m0q69wHa..rO"
+        #- "traefik.http.routers.mcp-saga.middlewares=mcp-auth"
 
 networks:
   network_public:

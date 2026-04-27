@@ -28,6 +28,10 @@ _WH_COMPRA   = "https://automatemaiawh.sagadatadriven.com.br/webhook/cliente_que
 _WH_VENDA    = "https://automatemaiawh.sagadatadriven.com.br/webhook/cliente_quer_vender"
 _WIDGET_URL  = os.getenv("WIDGET_URL", "https://mcp-primeiramao.sagadatadriven.com.br/ui/vehicle-offers.html")
 
+# Desabilita fallback Mobiauto — usa apenas Lambda AWS como fonte de estoque.
+# Para reativar o fallback, mude para False.
+_LAMBDA_APENAS = True
+
 async def _disparar_webhook(url: str, payload: dict, nome: str) -> bool:
     """Envia POST para o webhook interno. Aguarda confirmação antes de retornar."""
     payload_limpo = {k: v for k, v in payload.items() if v not in (None, "", [])}
@@ -110,8 +114,10 @@ async def _buscar_ofertas_json(cidade: str, consulta: str | None, filtros: dict 
     """Lógica compartilhada entre /local/ofertas e /api/ofertas."""
     veiculos_brutos = await LambdaInventoryService.buscar(cidade, filtros)
     fonte = "lambda"
+    lojas_cidade = []
 
-    if not veiculos_brutos:
+    if not veiculos_brutos and not _LAMBDA_APENAS:
+        # FALLBACK MOBIAUTO — desabilitado (_LAMBDA_APENAS = True)
         logger.info(f"[/api/ofertas] Lambda vazia para '{cidade}' — usando fallback Mobiauto")
         lojas        = await InventoryAggregator.obter_lista_lojas()
         lojas_cidade = _filtrar_lojas_por_cidade(lojas, cidade)
@@ -119,8 +125,9 @@ async def _buscar_ofertas_json(cidade: str, consulta: str | None, filtros: dict 
             return {"vehicles": [], "searchContext": {"city": cidade.upper()}, "message": f"Sem lojas em {cidade}"}
         veiculos_brutos = await InventoryAggregator.buscar_estoque_por_lojas(lojas_cidade, limit=25)
         fonte = "mobiauto"
-    else:
-        lojas_cidade = []
+
+    if not veiculos_brutos:
+        return {"vehicles": [], "searchContext": {"city": cidade.upper()}, "message": f"Sem veículos encontrados em {cidade}"}
 
     logger.info(f"[/api/ofertas] fonte={fonte} | brutos={len(veiculos_brutos)}")
     veiculos_com_img = [v for v in veiculos_brutos if v.get("url_imagem")]
@@ -923,19 +930,13 @@ async def buscar_veiculos(
     fonte = "lambda"
 
     if veiculos_brutos:
-        logger.info("=" * 60)
         logger.info(f"[FONTE] ✔ LAMBDA retornou {len(veiculos_brutos)} veículos para '{cidade}'")
-        logger.info("=" * 60)
-    else:
-        # ── Fallback: Mobiauto API ─────────────────────────────────────────
-        logger.warning("=" * 60)
+    elif not _LAMBDA_APENAS:
+        # ── FALLBACK MOBIAUTO — desabilitado (_LAMBDA_APENAS = True) ──────
         logger.warning(f"[FONTE] ✘ LAMBDA sem resultado — ativando FALLBACK MOBIAUTO para '{cidade}'")
-        logger.warning("=" * 60)
-
         lojas = await InventoryAggregator.obter_lista_lojas()
         lojas_cidade = _filtrar_lojas_por_cidade(lojas, cidade)
         if not lojas_cidade:
-            logger.warning(f"[FONTE] MOBIAUTO também sem lojas para '{cidade}'")
             return {
                 "vehicles": [],
                 "searchContext": {"city": cidade.upper()},
@@ -943,10 +944,14 @@ async def buscar_veiculos(
             }
         veiculos_brutos = await InventoryAggregator.buscar_estoque_por_lojas(lojas_cidade, limit=25)
         fonte = "mobiauto"
-
-        logger.info("=" * 60)
         logger.info(f"[FONTE] MOBIAUTO retornou {len(veiculos_brutos)} veículos para '{cidade}'")
-        logger.info("=" * 60)
+    else:
+        logger.warning(f"[FONTE] Lambda sem resultado para '{cidade}' — fallback desabilitado")
+        return {
+            "vehicles": [],
+            "searchContext": {"city": cidade.upper()},
+            "message": f"Não encontramos veículos disponíveis em {cidade}.",
+        }
 
     # Filtra apenas veículos com imagem
     veiculos_com_img = [v for v in veiculos_brutos if v.get("url_imagem")]

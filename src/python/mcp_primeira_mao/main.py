@@ -106,24 +106,8 @@ async def _serve_ui_js(request: Request) -> Response:
     return _serve_ui_file("vehicle-offers.js")
 
 
-@mcp.custom_route("/local/ofertas", methods=["GET"])
-async def _api_ofertas_local(request: Request) -> Response:
-    """Endpoint REST para teste local do widget — mesma lógica de buscar_veiculos.
-    Só acessível em localhost."""
-    host        = request.headers.get("host", "")
-    client_host = request.client.host if request.client else ""
-    is_local    = (
-        host.startswith("localhost")
-        or host.startswith("127.0.0.1")
-        or client_host in ("127.0.0.1", "::1")
-    )
-    if not is_local:
-        return Response(status_code=403)
-
-    cidade   = request.query_params.get("cidade", "Goiânia")
-    consulta = request.query_params.get("consulta") or None
-
-    # Tenta Lambda primeiro; cai no Mobiauto se retornar vazio
+async def _buscar_ofertas_json(cidade: str, consulta: str | None) -> dict:
+    """Lógica compartilhada entre /local/ofertas e /api/ofertas."""
     veiculos_brutos = await LambdaInventoryService.buscar_por_cidade(cidade)
     fonte = "lambda"
 
@@ -132,13 +116,11 @@ async def _api_ofertas_local(request: Request) -> Response:
         lojas        = await InventoryAggregator.obter_lista_lojas()
         lojas_cidade = _filtrar_lojas_por_cidade(lojas, cidade)
         if not lojas_cidade:
-            return JSONResponse({
-                "vehicles":      [],
-                "searchContext": {"city": cidade.upper()},
-                "message":       f"Sem lojas em {cidade}",
-            })
+            return {"vehicles": [], "searchContext": {"city": cidade.upper()}, "message": f"Sem lojas em {cidade}"}
         veiculos_brutos = await InventoryAggregator.buscar_estoque_por_lojas(lojas_cidade, limit=25)
         fonte = "mobiauto"
+    else:
+        lojas_cidade = []
 
     logger.info(f"[/api/ofertas] fonte={fonte} | brutos={len(veiculos_brutos)}")
     veiculos_com_img = [v for v in veiculos_brutos if v.get("url_imagem")]
@@ -163,14 +145,32 @@ async def _api_ofertas_local(request: Request) -> Response:
     )
 
     logger.info(f"[/api/ofertas] cidade='{cidade}' | fonte={fonte} | veículos={len(cards)}")
+    return {"vehicles": cards, "searchContext": {"store": ", ".join(nomes_lojas), "city": cidade.upper()}}
 
-    return JSONResponse({
-        "vehicles":      cards,
-        "searchContext": {
-            "store": ", ".join(nomes_lojas),
-            "city":  cidade.upper(),
-        },
-    })
+
+@mcp.custom_route("/api/ofertas", methods=["GET"])
+async def _api_ofertas(request: Request) -> Response:
+    """Endpoint público para o widget em produção."""
+    cidade   = request.query_params.get("cidade", "Goiânia")
+    consulta = request.query_params.get("consulta") or None
+    return JSONResponse(await _buscar_ofertas_json(cidade, consulta))
+
+
+@mcp.custom_route("/local/ofertas", methods=["GET"])
+async def _api_ofertas_local(request: Request) -> Response:
+    """Endpoint REST para teste local do widget — mantido para compatibilidade."""
+    host        = request.headers.get("host", "")
+    client_host = request.client.host if request.client else ""
+    is_local    = (
+        host.startswith("localhost")
+        or host.startswith("127.0.0.1")
+        or client_host in ("127.0.0.1", "::1")
+    )
+    if not is_local:
+        return Response(status_code=403)
+    cidade   = request.query_params.get("cidade", "Goiânia")
+    consulta = request.query_params.get("consulta") or None
+    return JSONResponse(await _buscar_ofertas_json(cidade, consulta))
 
 
 def _local_guard(request: Request) -> bool:

@@ -1555,33 +1555,34 @@
       if (!done) showError('Tempo esgotado ao carregar as ofertas.');
     }, INIT_TIMEOUT_MS);
 
-    /* Modo local: busca dados reais direto da API do servidor MCP */
+    /* Busca dados direto da API do servidor MCP (local e produção) */
     var isLocal = (
       window.location.hostname === 'localhost' ||
       window.location.hostname === '127.0.0.1'
     );
-    if (isLocal) {
-      var params   = new URLSearchParams(window.location.search);
-      var isSell   = params.get('mode') === 'sell';
-      var apiUrl;
+    var params   = new URLSearchParams(window.location.search);
+    var isSell   = params.get('mode') === 'sell';
+    var apiUrl;
 
-      if (isSell) {
-        /* Formulário de venda: aceita placa, km, proposta, veiculo como params */
-        apiUrl = '/local/formulario-venda';
-        var sellQ = [];
-        if (params.get('veiculo'))  sellQ.push('veiculo='  + encodeURIComponent(params.get('veiculo')));
-        if (params.get('placa'))    sellQ.push('placa='    + encodeURIComponent(params.get('placa')));
-        if (params.get('km'))       sellQ.push('km='       + encodeURIComponent(params.get('km')));
-        if (params.get('proposta')) sellQ.push('proposta=' + encodeURIComponent(params.get('proposta')));
-        if (sellQ.length) apiUrl += '?' + sellQ.join('&');
-      } else {
-        /* Carrossel de compra */
-        var cidade   = params.get('cidade')  || 'Goiânia';
-        var consulta = params.get('consulta') || '';
-        apiUrl = '/local/ofertas?cidade=' + encodeURIComponent(cidade);
-        if (consulta) apiUrl += '&consulta=' + encodeURIComponent(consulta);
-      }
+    if (isSell && isLocal) {
+      /* Formulário de venda: apenas local */
+      apiUrl = '/local/formulario-venda';
+      var sellQ = [];
+      if (params.get('veiculo'))  sellQ.push('veiculo='  + encodeURIComponent(params.get('veiculo')));
+      if (params.get('placa'))    sellQ.push('placa='    + encodeURIComponent(params.get('placa')));
+      if (params.get('km'))       sellQ.push('km='       + encodeURIComponent(params.get('km')));
+      if (params.get('proposta')) sellQ.push('proposta=' + encodeURIComponent(params.get('proposta')));
+      if (sellQ.length) apiUrl += '?' + sellQ.join('&');
+    } else if (!isSell) {
+      /* Carrossel de compra — funciona local e produção */
+      var cidade   = params.get('cidade')  || 'Goiânia';
+      var consulta = params.get('consulta') || '';
+      var baseEndpoint = isLocal ? '/local/ofertas' : '/api/ofertas';
+      apiUrl = baseEndpoint + '?cidade=' + encodeURIComponent(cidade);
+      if (consulta) apiUrl += '&consulta=' + encodeURIComponent(consulta);
+    }
 
+    if (apiUrl) {
       fetch(apiUrl)
         .then(function (r) {
           if (!r.ok) throw new Error('HTTP ' + r.status);

@@ -1,4 +1,4 @@
-import awswrangler as wr
+import awswrangler as wr  # type: ignore
 import json
 import os
 import pandas as pd

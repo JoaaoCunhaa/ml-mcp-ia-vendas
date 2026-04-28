@@ -731,8 +731,8 @@ async def listar_lojas():
     """
     Lista todas as lojas Primeira Mão Saga cadastradas com nome, cidade e UF.
 
-    NÃO USE quando o cliente quer comprar ou ver veículos — use `buscar_veiculos` diretamente.
-    Use APENAS quando o cliente explicitamente pede a lista de lojas/unidades (ex: "quais lojas vocês têm?").
+    NÃO USE para busca de carros, para descobrir cidades disponíveis ou para qualquer contexto de compra.
+    Use SOMENTE quando o cliente perguntar explicitamente "quais são as lojas?" ou "onde vocês têm loja?".
 
     OUTPUT: exiba o campo `lojas_markdown` diretamente ao usuário, exatamente como retornado.
     Adicione no rodapé a fonte dos dados e o total de lojas.
@@ -901,23 +901,27 @@ async def buscar_veiculos(
     Exibe o widget visual interativo com cards de veículos seminovos (fotos, preço, botão de contato).
 
     ═══ REGRA ABSOLUTA ═══
-    CHAME IMEDIATAMENTE assim que `cidade` for conhecida — com ou sem outros filtros.
+    CHAME IMEDIATAMENTE assim que cidade for conhecida — com ou sem outros filtros.
     NÃO faça nenhuma pergunta antes. NÃO peça marca, modelo, preço ou tipo antes de chamar.
     NÃO espere o cliente informar mais detalhes. Chame agora com o que já tem.
 
-    ÚNICO caso para perguntar antes: cidade não foi mencionada em nenhuma mensagem da conversa.
-    Se cidade já apareceu (mesmo que em mensagem anterior) → chame AGORA, sem perguntar nada.
+    ÚNICO caso para perguntar ANTES de chamar: cidade não foi mencionada em nenhuma mensagem.
+    Nesse caso, pergunte APENAS: "Em qual cidade você está procurando o carro?"
+    NÃO pergunte faixa de preço, tipo, marca ou modelo junto — só a cidade, nada mais.
+
+    Se cidade já apareceu em qualquer mensagem anterior → chame AGORA, sem nenhuma pergunta.
 
     ═══ APÓS CHAMAR ═══
-    PARE. NÃO pergunte filtros adicionais. NÃO diga "posso filtrar por marca/preço/tipo".
-    Os cards são exibidos automaticamente. Aguarde o cliente dar nome e telefone.
-    Se o cliente pedir refinamento (ex: "só Polo") → chame buscar_veiculos novamente com o novo filtro.
+    PARE imediatamente. NÃO pergunte filtros adicionais. NÃO ofereça refinamentos.
+    NÃO diga "posso filtrar por marca/preço/tipo". NÃO liste opções de filtro.
+    Os cards são exibidos automaticamente. Aguarde o cliente interagir ou dar nome e telefone.
+    Se o cliente pedir refinamento espontaneamente (ex: "só Polo") → chame novamente com o filtro.
 
     ═══ EXEMPLOS ═══
     "quero um carro em Goiânia"              → buscar_veiculos(cidade="Goiânia")
     "estou procurando carro em goiania"      → buscar_veiculos(cidade="Goiânia")
+    "quero comprar um carro" (sem cidade)    → pergunte SÓ: "Em qual cidade?"
     "tem Polo?" (cidade já mencionada)       → buscar_veiculos(cidade="Goiânia", modelo="Polo")
-    "Volkswagen Polo" (cidade já conhecida)  → buscar_veiculos(cidade="Goiânia", marca="Volkswagen", modelo="Polo")
     "HB20 até 60 mil em Brasília"            → buscar_veiculos(cidade="Brasília", modelo="HB20", preco_max=60000)
 
     Filtros opcionais — preencha APENAS com o que o cliente já informou espontaneamente:

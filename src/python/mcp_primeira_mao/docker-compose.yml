@@ -2,7 +2,7 @@ version: "3.9"
 
 services:
   mcp-primeira-mao:
-    image: mcp-primeira-mao:v3.0.5
+    image: mcp-primeira-mao:v3.0.6
     networks:
       - network_public
     environment:

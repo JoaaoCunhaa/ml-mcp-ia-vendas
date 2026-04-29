@@ -13,7 +13,7 @@
 
 **Endpoint:** `https://automatemaiawh.sagadatadriven.com.br/webhook/cliente_quer_comprar`
 
-**Acionado por:** `_criar_lead_compra` em `main.py`, após registro bem-sucedido do lead no CRM Mobiauto.
+**Acionado por:** Tool `registrar_interesse_compra` em `main.py`, chamada pelo widget via bridge `window.openai.callTool`, após o cliente clicar em "Tenho interesse" e preencher nome e telefone no card do carrossel.
 
 **Payload recebido:**
 
@@ -43,7 +43,7 @@
 
 **Endpoint:** `https://automatemaiawh.sagadatadriven.com.br/webhook/cliente_quer_vender`
 
-**Acionado por:** `_criar_lead_venda` em `main.py`, após registro bem-sucedido do lead no CRM Mobiauto.
+**Acionado por:** Tool `registrar_interesse_venda` em `main.py`, chamada pelo widget de venda via bridge `window.openai.callTool`, após o cliente preencher nome e telefone no formulário de avaliação e confirmar a proposta.
 
 **Payload recebido:**
 

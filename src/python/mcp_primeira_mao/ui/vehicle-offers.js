@@ -492,7 +492,17 @@ console.log("[vehicle-offers] inline JS carregado");
     log('DOMContentLoaded');
     log('window.openai', window.openai);
 
-    /* 1. Dados embutidos pelo servidor em <script type="application/json" id="vehicle-data"> */
+    /* 1. window.openai.toolOutput — SEMPRE preferir sobre dados embutidos.
+          toolOutput é injetado pelo ChatGPT com o structured_content da chamada atual,
+          garantindo que o widget renderize o payload correto mesmo quando o HTML do
+          recurso está em cache com dados de uma chamada anterior. */
+    var output = window.openai && window.openai.toolOutput;
+    log('toolOutput', output);
+    var sc = extractStructuredContent(output);
+    if (sc) { tryRender(sc); return; }
+
+    /* 2. Dados embutidos — fallback para quando toolOutput ainda não chegou ou
+          o widget é aberto fora do ChatGPT Apps. */
     var dataEl = document.getElementById('vehicle-data');
     if (dataEl) {
       try {
@@ -504,12 +514,6 @@ console.log("[vehicle-offers] inline JS carregado");
         log('embedded data parse error', e);
       }
     }
-
-    /* 2. window.openai.toolOutput (disponível após tool call — pode chegar com delay) */
-    var output = window.openai && window.openai.toolOutput;
-    log('toolOutput', output);
-    var sc = extractStructuredContent(output);
-    if (sc) { tryRender(sc); return; }
 
     renderLoading('Carregando ofertas...');
 

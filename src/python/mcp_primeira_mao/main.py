@@ -131,6 +131,7 @@ async def _debug_inspect(request: Request) -> JSONResponse:
         buscar_detail = {"error": str(e)}
 
     # ── Wire format: converte via to_mcp_tool() — exatamente o que vai no tools/list ──
+    # Nota: mcp.types.Tool armazena como .meta (alias _meta no JSON wire)
     wire_out = []
     try:
         tools_raw = await mcp.list_tools()
@@ -138,7 +139,7 @@ async def _debug_inspect(request: Request) -> JSONResponse:
             mcp_tool = t.to_mcp_tool()
             wire_out.append({
                 "name":  mcp_tool.name,
-                "_meta": getattr(mcp_tool, "_meta", None),
+                "_meta": mcp_tool.meta,   # .meta = campo Python; "_meta" = alias JSON wire
             })
     except Exception as e:
         wire_out = [{"error": str(e)}]

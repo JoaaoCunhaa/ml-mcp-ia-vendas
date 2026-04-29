@@ -87,6 +87,36 @@ async def _openai_domain_challenge(request: Request) -> PlainTextResponse:
     return PlainTextResponse(token)
 
 
+# ── Debug: inspeciona o que o servidor MCP expõe ──────────────────
+# Acesse /debug/inspect para ver tools registradas e seus _meta.
+# Útil para confirmar que openai/outputTemplate está no descriptor.
+@mcp.custom_route("/debug/inspect", methods=["GET"])
+async def _debug_inspect(request: Request) -> JSONResponse:
+    try:
+        tools_raw = mcp._tool_manager.list_tools()
+        tools_out = []
+        for t in tools_raw:
+            tools_out.append({
+                "name":        t.name,
+                "description": (t.description or "")[:120],
+                "_meta":       getattr(t, "_meta", None) or getattr(t, "meta", None),
+            })
+    except Exception as e:
+        tools_out = [{"error": str(e)}]
+
+    try:
+        res_raw = mcp._resource_manager.list_resources()
+        resources_out = [{"uri": str(r.uri), "mime_type": r.mime_type} for r in res_raw]
+    except Exception as e:
+        resources_out = [{"error": str(e)}]
+
+    return JSONResponse({
+        "tools":     tools_out,
+        "resources": resources_out,
+        "transport": os.getenv("MCP_TRANSPORT", "stdio"),
+    })
+
+
 # ── Serving estático da UI (arquivos separados) ────────────────────
 # CSP definida no header HTTP — mais segura que meta tag no HTML.
 # Com script-src 'self' e style-src 'self' (sem 'unsafe-inline').
@@ -150,16 +180,21 @@ async def _serve_ui_js(request: Request) -> Response:
     return _serve_ui_file("vehicle-offers.js")
 
 
-@mcp.resource("ui://vehicle-offers", mime_type="text/html;profile=mcp-app")
+@mcp.resource("ui://vehicle-offers", mime_type="text/html+skybridge")
 async def _resource_vehicle_offers() -> str:
     """HTML do widget de veículos — carregado como recurso MCP pelo ChatGPT Apps."""
     with open(os.path.join(_UI_DIR, "vehicle-offers.html"), "r", encoding="utf-8") as f:
         html = f.read()
-    # Substitui refs relativas por URLs absolutas — necessário quando o recurso
-    # é carregado via ui:// (sem base URL do servidor HTTPS).
     base = "https://mcp-primeiramao.sagadatadriven.com.br"
+    # Refs relativas → absolutas (necessário no contexto ui:// sem base URL HTTPS)
     html = html.replace('href="vehicle-offers.css"', f'href="{base}/ui/vehicle-offers.css"')
     html = html.replace('src="vehicle-offers.js"',   f'src="{base}/ui/vehicle-offers.js"')
+    # CSP: quando o iframe sobe via ui://, 'self' não é o domínio do servidor.
+    # Adiciona o domínio absoluto em connect-src para o fetch de fallback funcionar.
+    html = html.replace(
+        "connect-src 'self';",
+        f"connect-src 'self' {base};",
+    )
     return html
 
 
@@ -897,10 +932,9 @@ async def buscar_veiculo(
 @mcp.tool(
     annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True, destructiveHint=False),
     app=_APP_COMPRA,
-    meta={
-        "openai/outputTemplate": "ui://vehicle-offers",
-        "ui": {"resourceUri": "ui://vehicle-offers"},
-    },
+    # _APP_COMPRA já injeta _meta.ui.resourceUri no descriptor via AppConfig.
+    # meta= adiciona openai/outputTemplate ao mesmo nível — obrigatório para ChatGPT Apps.
+    meta={"openai/outputTemplate": "ui://vehicle-offers"},
 )
 async def buscar_veiculos(
     cidade: str,

@@ -394,11 +394,17 @@
      ════════════════════════════════════════════════════════════════════ */
 
   function getData() {
-    /* Padrão MCP Apps → fallback genérico → URL param (dev) */
+    /* 1. ChatGPT Apps bridge — canal principal (toolOutput = structuredContent) */
+    if (window.openai && window.openai.toolOutput && typeof window.openai.toolOutput === 'object') {
+      dbgLog('getData', 'window.openai.toolOutput');
+      return window.openai.toolOutput;
+    }
+    /* 2. Padrão MCP Apps */
     if (window.__MCP_STRUCTURED_CONTENT__) return window.__MCP_STRUCTURED_CONTENT__;
     if (window.__INITIAL_DATA__)           return window.__INITIAL_DATA__;
     if (window.__TOOL_RESULT__ && window.__TOOL_RESULT__.structuredContent)
       return window.__TOOL_RESULT__.structuredContent;
+    /* 3. URL param (dev) */
     try {
       var p = new URLSearchParams(window.location.search).get('data');
       if (p) return JSON.parse(decodeURIComponent(p));
@@ -407,6 +413,8 @@
   }
 
   function getMeta() {
+    /* ChatGPT Apps — toolResponseMetadata = _meta do result */
+    if (window.openai && window.openai.toolResponseMetadata) return window.openai.toolResponseMetadata;
     if (window.__MCP_META__) return window.__MCP_META__;
     if (window.__TOOL_RESULT__ && window.__TOOL_RESULT__._meta)
       return window.__TOOL_RESULT__._meta;
@@ -1559,18 +1567,31 @@
         : (Array.isArray(sc.vehicles) ? sc.vehicles : null)
         || (Array.isArray(meta.items) ? meta.items  : null);
 
-      if (!rawList) { showState('emp'); return; }
+      dbgLog('structuredContent recebido', sc);
+      dbgLog('total vehicles recebido', rawList ? rawList.length : 0);
+
+      if (!rawList) {
+        dbgLog('rawList vazio', 'sem vehicles em sc nem meta.items');
+        showState('emp');
+        return;
+      }
 
       /* Valida campos obrigatórios de cada veículo */
       var vehicleList = rawList.filter(function (v) {
-        if (!v || typeof v !== 'object') return false;
-        var hasTitle = !!(v.title || v.makeName);
+        if (!v || typeof v !== 'object') {
+          dbgLog('descarte', 'não é objeto');
+          return false;
+        }
+        var hasTitle = !!(v.title || v.makeName || v.modelName);
         var imgUrl   = v.imageUrl || v.url_imagem || '';
         var hasImg   = typeof imgUrl === 'string' && imgUrl.indexOf('https://') === 0;
+        var hasPrice = v.price != null && v.price !== '';
+        if (!hasTitle) dbgLog('descarte', { id: v.id, motivo: 'sem title/makeName/modelName' });
+        if (!hasImg)   dbgLog('descarte', { id: v.id, motivo: 'imageUrl inválida: ' + imgUrl.slice(0, 60) });
         return hasTitle && hasImg;
       });
 
-      dbgLog('vehicles válidos', vehicleList.length + '/' + rawList.length);
+      dbgLog('total vehicles válidos', vehicleList.length + '/' + rawList.length);
 
       render({
         vehicles:      vehicleList,
@@ -1626,7 +1647,6 @@
       if (!done) showError('Tempo esgotado ao carregar as ofertas.');
     }, INIT_TIMEOUT_MS);
 
-    /* Busca dados direto da API do servidor MCP (local e produção) */
     var isLocal = (
       window.location.hostname === 'localhost' ||
       window.location.hostname === '127.0.0.1'
@@ -1634,9 +1654,25 @@
     var params    = new URLSearchParams(window.location.search);
     var toolInput = (window.openai && window.openai.toolInput && typeof window.openai.toolInput === 'object')
       ? window.openai.toolInput : null;
-    dbgLog('toolInput', toolInput);
+
+    dbgLog('vehicle widget loaded', {
+      hostname:    window.location.hostname,
+      search:      window.location.search,
+      hasOpenai:   !!(window.openai),
+      toolOutput:  window.openai && window.openai.toolOutput,
+      toolInput:   toolInput,
+    });
 
     var apiUrl;
+
+    /* ── 1. window.openai.toolOutput — canal primário do ChatGPT Apps ── */
+    if (window.openai && window.openai.toolOutput && typeof window.openai.toolOutput === 'object') {
+      dbgLog('← toolOutput (primário)', window.openai.toolOutput);
+      done = true;
+      clearTimeout(timeout);
+      render(window.openai.toolOutput, window.openai.toolResponseMetadata || {});
+      return;
+    }
 
     /* ── Modo venda via window.openai.toolInput (contexto ui:// do ChatGPT) ── */
     if (toolInput && (toolInput.veiculo_descricao || toolInput.valor_proposta)) {

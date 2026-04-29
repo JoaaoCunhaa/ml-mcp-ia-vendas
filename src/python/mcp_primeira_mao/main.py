@@ -124,11 +124,14 @@ async def _debug_inspect(request: Request) -> JSONResponse:
     # ── html_preview + inline_check ──────────────────────────────────────────
     html_preview = None
     try:
+        _embedded_debug = _safe_json_embed(_LAST_WIDGET_PAYLOAD)
         _full = (
             '<!DOCTYPE html>\n<html lang="pt-BR">\n<head>\n'
             '  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
             f'  <style>{_CSS_CONTENT}</style>\n'
-            f'</head>\n<body>\n  <div id="app">Carregando ofertas...</div>\n  <script>{_JS_CONTENT}</script>\n</body>\n</html>'
+            f'</head>\n<body>\n  <div id="app">Carregando ofertas...</div>\n'
+            f'  <script type="application/json" id="vehicle-data">{_embedded_debug}</script>\n'
+            f'  <script>{_JS_CONTENT}</script>\n</body>\n</html>'
         )
         _bad_js  = any(p in _full for p in ["/ui/vehicle-offers.js",  "/static/vehicle-offers.js",
                                              "src=\"https://mcp-primeiramao"])
@@ -150,6 +153,13 @@ async def _debug_inspect(request: Request) -> JSONResponse:
             "contains_setInterval":          "setInterval" in _js,
             "contains_requestModel":         "requestModel" in _js,
             "contains_toolOutput":           "toolOutput" in _js,
+            # Payload embutido
+            "html_contains_vehicle_data_script": 'id="vehicle-data"' in _full,
+            "last_widget_payload_exists":     _LAST_WIDGET_PAYLOAD is not None,
+            "last_widget_payload_type":       (_LAST_WIDGET_PAYLOAD or {}).get("type"),
+            "last_widget_payload_mode":       (_LAST_WIDGET_PAYLOAD or {}).get("mode"),
+            "last_widget_payload_vehicles":   len((_LAST_WIDGET_PAYLOAD or {}).get("vehicles", [])),
+            "vehicle_data_preview":           _embedded_debug[:200],
             # Hashes CSP
             "css_hash":                      _CSS_HASH or "ERRO_HASH",
             "js_hash":                       _JS_HASH  or "ERRO_HASH",
@@ -274,6 +284,23 @@ _WIDGET_CSP_META: dict = {
     },
 }
 
+# ── Payload do último widget chamado — embutido no HTML do resource ──────────
+# Quando buscar_veiculos ou exibir_formulario_venda é chamado, armazena o sc.
+# Quando ui://vehicle-offers é lido (logo após a tool call), o HTML inclui o
+# dado via <script type="application/json" id="vehicle-data">. Isso é independente
+# de window.openai.toolOutput, que consistentemente chega null no ChatGPT Apps.
+_LAST_WIDGET_PAYLOAD: dict | None = None
+
+
+def _safe_json_embed(obj) -> str:
+    """JSON seguro para embutir em <script type='application/json'>."""
+    if obj is None:
+        return 'null'
+    raw = json.dumps(obj, ensure_ascii=False)
+    # Evita que </script> dentro de strings quebre o parser HTML
+    return raw.replace('</', '<\\/')
+
+
 _UI_CSP = (
     "default-src 'none'; "
     "script-src 'self'; "
@@ -343,13 +370,14 @@ async def _serve_static_js(request: Request) -> Response:
 
 @mcp.resource("ui://vehicle-offers", mime_type="text/html;profile=mcp-app", meta=_WIDGET_CSP_META)
 async def _resource_vehicle_offers() -> str:
-    """HTML autossuficiente — CSS e JS inlined, hashes no openai/widgetCSP.
+    """HTML com dados embutidos em <script type='application/json' id='vehicle-data'>.
 
-    Os hashes SHA-256 em _WIDGET_CSP_META foram calculados ao startup sobre
-    exatamente _CSS_CONTENT e _JS_CONTENT — sem whitespace extra, sem leitura
-    de arquivo aqui. O conteúdo entre <style> e <script> deve ser byte-idêntico
-    ao que foi hasheado.
+    _LAST_WIDGET_PAYLOAD é preenchido por buscar_veiculos / exibir_formulario_venda
+    antes de o ChatGPT ler este resource. O JS lê o script tag antes de tentar
+    window.openai.toolOutput, eliminando a dependência do bridge que vem null.
+    O hash CSP cobre apenas o bloco JS executável — o JSON data tag não é JS.
     """
+    embedded = _safe_json_embed(_LAST_WIDGET_PAYLOAD)
     return (
         '<!DOCTYPE html>\n'
         '<html lang="pt-BR">\n'
@@ -360,6 +388,7 @@ async def _resource_vehicle_offers() -> str:
         '</head>\n'
         '<body>\n'
         '  <div id="app">Carregando ofertas...</div>\n'
+        f'  <script type="application/json" id="vehicle-data">{embedded}</script>\n'
         f'  <script>{_JS_CONTENT}</script>\n'
         '</body>\n'
         '</html>'
@@ -1220,6 +1249,10 @@ async def buscar_veiculos(
         },
     }
 
+    # Embute no HTML do resource — independente de window.openai.toolOutput
+    global _LAST_WIDGET_PAYLOAD
+    _LAST_WIDGET_PAYLOAD = sc
+
     return _ToolResult(
         content=TextContent(
             type="text",
@@ -1281,16 +1314,21 @@ async def exibir_formulario_venda(
         f"Formulário de avaliação exibido para {veiculo_descricao}."
     )
 
+    sell_sc = {
+        "mode":     "sell",
+        "veiculo":  veiculo_descricao,
+        "placa":    placa or "",
+        "km":       km or "",
+        "km_fmt":   km_fmt,
+        "proposta": proposta_str,
+    }
+
+    global _LAST_WIDGET_PAYLOAD
+    _LAST_WIDGET_PAYLOAD = sell_sc
+
     return _ToolResult(
         content=TextContent(type="text", text=texto),
-        structured_content={
-            "mode":     "sell",
-            "veiculo":  veiculo_descricao,
-            "placa":    placa or "",
-            "km":       km or "",
-            "km_fmt":   km_fmt,
-            "proposta": proposta_str,
-        },
+        structured_content=sell_sc,
     )
 
 

@@ -357,9 +357,22 @@ console.log("[vehicle-offers] inline JS carregado");
     log('DOMContentLoaded');
     log('window.openai', window.openai);
 
+    /* 1. Dados embutidos pelo servidor em <script type="application/json" id="vehicle-data"> */
+    var dataEl = document.getElementById('vehicle-data');
+    if (dataEl) {
+      try {
+        var embedded = JSON.parse(dataEl.textContent || dataEl.innerHTML || 'null');
+        log('embedded data', embedded);
+        var scEmbed = extractStructuredContent(embedded);
+        if (scEmbed) { tryRender(scEmbed); return; }
+      } catch (e) {
+        log('embedded data parse error', e);
+      }
+    }
+
+    /* 2. window.openai.toolOutput (fallback para outros clientes MCP) */
     var output = window.openai && window.openai.toolOutput;
     log('toolOutput', output);
-
     var sc = extractStructuredContent(output);
     if (sc) { tryRender(sc); return; }
 

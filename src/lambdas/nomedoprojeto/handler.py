@@ -79,6 +79,7 @@ def _build_query(params: dict) -> str:
     cidade_norm = _sanitize(_norm_val(cidade))
     filters = [
         f"{_norm_sql('c.\"name\"')} = '{cidade_norm}'",
+        "d.status = 1",
     ]
 
     if marca:

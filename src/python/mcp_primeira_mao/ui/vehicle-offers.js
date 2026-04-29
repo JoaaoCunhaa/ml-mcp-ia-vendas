@@ -14,19 +14,15 @@ console.log("[vehicle-offers] inline JS carregado");
   function extractStructuredContent(payload) {
     if (!payload) return null;
 
-    // Formato raiz direto: {type:"vehicle_cards", vehicles:[...]}
     if (payload.type === 'vehicle_cards' && Array.isArray(payload.vehicles)) return payload;
-    // Modo venda direto: {mode:"sell", veiculo:...}
     if (payload.mode === 'sell') return payload;
 
-    // Aninhado em .structuredContent
     var sc = payload.structuredContent;
     if (sc) {
       if (sc.type === 'vehicle_cards' && Array.isArray(sc.vehicles)) return sc;
       if (sc.mode === 'sell') return sc;
     }
 
-    // Aninhado em .toolOutput
     var to = payload.toolOutput;
     if (to) {
       if (to.type === 'vehicle_cards' && Array.isArray(to.vehicles)) return to;
@@ -38,7 +34,6 @@ console.log("[vehicle-offers] inline JS carregado");
       }
     }
 
-    // Aninhado em .params.structuredContent (JSON-RPC)
     if (payload.params) {
       var psc = payload.params.structuredContent;
       if (psc) {
@@ -64,7 +59,25 @@ console.log("[vehicle-offers] inline JS carregado");
 
   function fmtPrice(v) {
     if (v == null) return 'Consultar';
-    var n = parseFloat(String(v).replace(/[^\d,.]/g, '').replace(',', '.'));
+    var s = String(v).trim();
+    if (!s) return 'Consultar';
+
+    // Remove símbolo de moeda e espaços para detectar o formato numérico
+    var clean = s.replace(/[R$\s]/g, '');
+    if (!clean) return 'Consultar';
+
+    var lastDot   = clean.lastIndexOf('.');
+    var lastComma = clean.lastIndexOf(',');
+
+    var n;
+    if (lastComma > lastDot) {
+      // Formato brasileiro: 49.990,00 — vírgula é separador decimal
+      n = parseFloat(clean.replace(/\./g, '').replace(',', '.'));
+    } else {
+      // Número puro ou formato US: 49990 ou 49990.50
+      n = parseFloat(clean.replace(/,/g, ''));
+    }
+
     if (isNaN(n) || n <= 0) return 'Consultar';
     var parts = n.toFixed(2).split('.');
     parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.');
@@ -258,7 +271,7 @@ console.log("[vehicle-offers] inline JS carregado");
     var title     = vehicle.title || [vehicle.brand || vehicle.marca, vehicle.model || vehicle.modelo].filter(Boolean).join(' ') || 'Veículo';
     var brand     = vehicle.brand || vehicle.marca || '';
     var year      = vehicle.year || vehicle.model_year || '';
-    var km        = vehicle.kmFormatted || fmtKm(vehicle.km);
+    var km        = fmtKm(vehicle.kmFormatted || vehicle.km);
     var location  = vehicle.location || vehicle.store || [vehicle.loja, vehicle.cidade].filter(Boolean).join(' — ') || '';
 
     var article = el('article', 'vehicle-card');
@@ -319,6 +332,102 @@ console.log("[vehicle-offers] inline JS carregado");
       linkBtn.appendChild(txt('Ver no site'));
       actions.appendChild(linkBtn);
     }
+
+    /* ── Botão de interesse ── */
+    var interestWrap = el('div', 'interest-wrap');
+
+    var interestBtn = el('button', 'btn btn--primary');
+    interestBtn.setAttribute('type', 'button');
+    interestBtn.appendChild(txt('Tenho interesse'));
+
+    var interestForm = el('div', 'interest-form');
+
+    var iNameInput = el('input', 'sell-form__input');
+    iNameInput.setAttribute('type', 'text');
+    iNameInput.setAttribute('placeholder', 'Seu nome completo');
+    iNameInput.setAttribute('maxlength', '100');
+    iNameInput.setAttribute('autocomplete', 'name');
+
+    var iNameErr = el('p', 'sell-form__error');
+
+    var iTelInput = el('input', 'sell-form__input');
+    iTelInput.setAttribute('type', 'tel');
+    iTelInput.setAttribute('placeholder', 'Telefone com DDD');
+    iTelInput.setAttribute('maxlength', '16');
+    iTelInput.setAttribute('autocomplete', 'tel');
+
+    var iTelErr = el('p', 'sell-form__error');
+
+    iTelInput.addEventListener('input', function () {
+      this.value = maskTel(this.value);
+    });
+
+    var iFeedback = el('div', 'sell-card__feedback');
+
+    var iSubmit = el('button', 'btn btn--primary');
+    iSubmit.setAttribute('type', 'button');
+    iSubmit.appendChild(txt('Confirmar via WhatsApp'));
+
+    interestForm.appendChild(iNameInput);
+    interestForm.appendChild(iNameErr);
+    interestForm.appendChild(iTelInput);
+    interestForm.appendChild(iTelErr);
+    interestForm.appendChild(iFeedback);
+    interestForm.appendChild(iSubmit);
+
+    interestBtn.addEventListener('click', function () {
+      interestBtn.style.display = 'none';
+      interestForm.style.display = 'flex';
+      iNameInput.focus();
+    });
+
+    iSubmit.addEventListener('click', function () {
+      var nome = iNameInput.value.trim();
+      var tel  = iTelInput.value.replace(/\D/g, '');
+
+      iNameErr.textContent = '';
+      iTelErr.textContent  = '';
+
+      if (!nome || nome.length < 2) {
+        iNameErr.textContent = 'Informe seu nome completo.';
+        iNameInput.focus();
+        return;
+      }
+      if (tel.length < 10) {
+        iTelErr.textContent = 'Informe um telefone com DDD.';
+        iTelInput.focus();
+        return;
+      }
+
+      iSubmit.disabled    = true;
+      iSubmit.textContent = 'Aguarde...';
+
+      callTool('registrar_interesse_compra', {
+        nome_cliente:     nome,
+        telefone_cliente: tel,
+        titulo_veiculo:   title,
+        loja_unidade:     location,
+        preco_formatado:  vehicle.price ? String(vehicle.price) : '',
+        veiculo_id:       String(vehicle.id || ''),
+      })
+      .then(function () {
+        iSubmit.textContent = 'Enviado ✓';
+        iFeedback.textContent = 'Pronto, ' + nome.split(' ')[0] + '! Um consultor entrará em contato via WhatsApp.';
+        iFeedback.className = 'sell-card__feedback sell-card__feedback--ok';
+      })
+      .catch(function (err) {
+        iSubmit.disabled    = false;
+        iSubmit.textContent = 'Confirmar via WhatsApp';
+        log('callTool error:', err && err.message);
+        iFeedback.textContent = 'Não foi possível registrar. Tente novamente.';
+        iFeedback.className = 'sell-card__feedback sell-card__feedback--err';
+      });
+    });
+
+    interestWrap.appendChild(interestBtn);
+    interestWrap.appendChild(interestForm);
+    actions.appendChild(interestWrap);
+
     article.appendChild(actions);
     return article;
   }
@@ -334,12 +443,38 @@ console.log("[vehicle-offers] inline JS carregado");
     var vehicles = Array.isArray(sc.vehicles) ? sc.vehicles : (Array.isArray(sc.offers) ? sc.offers : []);
     if (!vehicles.length) { renderEmpty('Nenhum veículo encontrado para essa busca.'); return; }
 
-    var grid = el('div', 'vehicle-grid');
-    grid.setAttribute('role', 'list');
+    var wrap = el('div', 'vehicle-carousel-wrap');
+
+    var track = el('div', 'vehicle-carousel');
+    track.setAttribute('role', 'list');
     for (var i = 0; i < vehicles.length; i++) {
-      if (vehicles[i] && typeof vehicles[i] === 'object') grid.appendChild(buildCard(vehicles[i]));
+      if (vehicles[i] && typeof vehicles[i] === 'object') track.appendChild(buildCard(vehicles[i]));
     }
-    app.appendChild(grid);
+    wrap.appendChild(track);
+
+    var nav = el('div', 'carousel-nav');
+
+    var prevBtn = el('button', 'carousel-btn');
+    prevBtn.setAttribute('type', 'button');
+    prevBtn.setAttribute('aria-label', 'Anterior');
+    prevBtn.innerHTML = '&#8592;';
+    prevBtn.addEventListener('click', function () {
+      track.scrollBy({ left: -280, behavior: 'smooth' });
+    });
+
+    var nextBtn = el('button', 'carousel-btn');
+    nextBtn.setAttribute('type', 'button');
+    nextBtn.setAttribute('aria-label', 'Próximo');
+    nextBtn.innerHTML = '&#8594;';
+    nextBtn.addEventListener('click', function () {
+      track.scrollBy({ left: 280, behavior: 'smooth' });
+    });
+
+    nav.appendChild(prevBtn);
+    nav.appendChild(nextBtn);
+    wrap.appendChild(nav);
+
+    app.appendChild(wrap);
     log('renderizado | ' + vehicles.length + ' cards');
   }
 
@@ -370,7 +505,7 @@ console.log("[vehicle-offers] inline JS carregado");
       }
     }
 
-    /* 2. window.openai.toolOutput (fallback para outros clientes MCP) */
+    /* 2. window.openai.toolOutput (disponível após tool call — pode chegar com delay) */
     var output = window.openai && window.openai.toolOutput;
     log('toolOutput', output);
     var sc = extractStructuredContent(output);
@@ -378,26 +513,30 @@ console.log("[vehicle-offers] inline JS carregado");
 
     renderLoading('Carregando ofertas...');
 
-    /* postMessage listener — loga tudo e tenta extrair em qualquer formato */
+    /* 3. Polling de window.openai.toolOutput por até 5s */
+    var _pollCount = 0;
+    var _pollTimer = setInterval(function () {
+      _pollCount++;
+      var out = window.openai && window.openai.toolOutput;
+      if (out) {
+        clearInterval(_pollTimer);
+        log('toolOutput via poll (tentativa ' + _pollCount + ')', out);
+        var scPoll = extractStructuredContent(out);
+        if (scPoll) { tryRender(scPoll); }
+        return;
+      }
+      if (_pollCount >= 25) {
+        clearInterval(_pollTimer);
+        log('poll encerrado sem dados após 5s');
+      }
+    }, 200);
+
+    /* 4. postMessage listener */
     window.addEventListener('message', function (event) {
       log('raw message', event.data);
       var sc2 = extractStructuredContent(event.data);
       if (sc2) tryRender(sc2);
     });
-
-    /* window.openai.addEventListener (Apps SDK, se disponível) */
-    try {
-      if (window.openai && typeof window.openai.addEventListener === 'function') {
-        window.openai.addEventListener('toolOutput', function (event) {
-          log('openai toolOutput event', event);
-          var output2 = (event && event.detail) || event;
-          var sc3 = extractStructuredContent(output2);
-          if (sc3) tryRender(sc3);
-        });
-      }
-    } catch (err) {
-      log('openai event listener unavailable', err);
-    }
   }
 
   if (document.readyState === 'loading') {

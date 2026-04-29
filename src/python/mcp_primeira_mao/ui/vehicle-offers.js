@@ -393,11 +393,26 @@
      _meta permanece em APP.meta (memória), nunca vai para o DOM
      ════════════════════════════════════════════════════════════════════ */
 
+  /**
+   * Extrai structuredContent de um toolOutput completo.
+   * toolOutput pode ser:
+   *   a) o resultado completo: { content: [...], structuredContent: {...} }
+   *   b) já o structuredContent direto: { type: "vehicle_cards", vehicles: [...] }
+   */
+  function extractSC(out) {
+    if (!out || typeof out !== 'object') return null;
+    if (out.structuredContent && typeof out.structuredContent === 'object') {
+      return out.structuredContent;
+    }
+    // fallback: é o próprio structuredContent
+    return out;
+  }
+
   function getData() {
-    /* 1. ChatGPT Apps bridge — canal principal (toolOutput = structuredContent) */
-    if (window.openai && window.openai.toolOutput && typeof window.openai.toolOutput === 'object') {
-      dbgLog('getData', 'window.openai.toolOutput');
-      return window.openai.toolOutput;
+    /* 1. ChatGPT Apps bridge — canal principal */
+    if (window.openai && window.openai.toolOutput) {
+      var sc = extractSC(window.openai.toolOutput);
+      if (sc) { dbgLog('getData', 'window.openai.toolOutput.structuredContent'); return sc; }
     }
     /* 2. Padrão MCP Apps */
     if (window.__MCP_STRUCTURED_CONTENT__) return window.__MCP_STRUCTURED_CONTENT__;
@@ -1619,6 +1634,7 @@
      ════════════════════════════════════════════════════════════════════ */
 
   function init() {
+    console.log('[vehicle-offers] init()');
     dbgInit();
 
     /* Reset de estado */
@@ -1626,6 +1642,26 @@
     APP.rateMap      = {};
     APP.pendingCalls = 0;
 
+    /* ── Bridge oficial ChatGPT Apps ── */
+    if (!window.openai) {
+      console.warn('[vehicle-offers] window.openai não disponível — fallback ativo');
+    } else {
+      console.log('[vehicle-offers] window.openai presente | toolOutput=', window.openai.toolOutput);
+      var sc0 = extractSC(window.openai.toolOutput);
+      console.log('[vehicle-offers] structuredContent=', sc0);
+      if (sc0 && typeof sc0 === 'object') {
+        if (sc0.type === 'vehicle_cards') {
+          console.log('[vehicle-offers] vehicle_cards recebido via bridge | n=', sc0.vehicles ? sc0.vehicles.length : 0);
+          render(sc0, window.openai.toolResponseMetadata || {});
+          return;
+        }
+        /* outros tipos (mode:sell, etc.) */
+        render(sc0, window.openai.toolResponseMetadata || {});
+        return;
+      }
+    }
+
+    /* ── Fallback: polling + API ── */
     try {
       var d = getData();
       dbgLog('init data', d);
@@ -1634,7 +1670,8 @@
         return;
       }
       waitForData();
-    } catch (_) {
+    } catch (e) {
+      console.error('[vehicle-offers] init error:', e);
       showError('Não foi possível inicializar o widget.');
     }
   }
@@ -1666,12 +1703,15 @@
     var apiUrl;
 
     /* ── 1. window.openai.toolOutput — canal primário do ChatGPT Apps ── */
-    if (window.openai && window.openai.toolOutput && typeof window.openai.toolOutput === 'object') {
-      dbgLog('← toolOutput (primário)', window.openai.toolOutput);
-      done = true;
-      clearTimeout(timeout);
-      render(window.openai.toolOutput, window.openai.toolResponseMetadata || {});
-      return;
+    if (window.openai && window.openai.toolOutput) {
+      var sc1 = extractSC(window.openai.toolOutput);
+      if (sc1 && typeof sc1 === 'object') {
+        dbgLog('← toolOutput (waitForData)', sc1);
+        done = true;
+        clearTimeout(timeout);
+        render(sc1, window.openai.toolResponseMetadata || {});
+        return;
+      }
     }
 
     /* ── Modo venda via window.openai.toolInput (contexto ui:// do ChatGPT) ── */

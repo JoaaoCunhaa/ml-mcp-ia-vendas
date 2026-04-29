@@ -1,3 +1,5 @@
+console.log("[vehicle-offers] JS carregado");
+
 (function () {
   'use strict';
 
@@ -10,8 +12,8 @@
   }
 
   function getToolOutput() {
-    if (window.openai && window.openai.toolOutput)      return window.openai.toolOutput;
-    if (window.openai && window.openai.toolResponse)    return window.openai.toolResponse;
+    if (window.openai && window.openai.toolOutput)        return window.openai.toolOutput;
+    if (window.openai && window.openai.toolResponse)      return window.openai.toolResponse;
     if (window.openai && window.openai.structuredContent) return { structuredContent: window.openai.structuredContent };
     return null;
   }
@@ -32,14 +34,14 @@
     if (isNaN(n) || n <= 0) return 'Consultar';
     var parts = n.toFixed(2).split('.');
     parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-    return 'R ' + parts[0] + ',' + parts[1];
+    return 'R$ ' + parts[0] + ',' + parts[1];
   }
 
   function fmtKm(v) {
     if (v == null || v === '') return '';
     var n = parseInt(String(v).replace(/\D/g, ''), 10);
     if (isNaN(n)) return '';
-    return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '.') + ' km';
+    return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '.') + ' km';
   }
 
   function safeUrl(url) {
@@ -73,19 +75,17 @@
     app.appendChild(div);
   }
 
-  function buildCard(vehicle, index) {
-    var imageUrl  = safeUrl(vehicle.url_imagem || vehicle.imageUrl || vehicle.image || vehicle.foto || '');
-    var linkUrl   = safeUrl(vehicle.url || vehicle.link || '');
-    var title     = vehicle.title || [vehicle.marca, vehicle.modelo].filter(Boolean).join(' ') || 'Veículo';
+  function buildCard(vehicle) {
+    var imageUrl  = safeUrl(vehicle.imageUrl || vehicle.url_imagem || vehicle.image || vehicle.foto || '');
+    var linkUrl   = safeUrl(vehicle.link || vehicle.url || '');
+    var title     = vehicle.title || [vehicle.brand || vehicle.marca, vehicle.model || vehicle.modelo].filter(Boolean).join(' ') || 'Veículo';
     var brand     = vehicle.brand || vehicle.marca || '';
     var year      = vehicle.year || vehicle.model_year || '';
     var km        = vehicle.kmFormatted || fmtKm(vehicle.km);
-    var price     = vehicle.price;
-    var location  = vehicle.location || [vehicle.loja, vehicle.cidade].filter(Boolean).join(' — ') || '';
+    var location  = vehicle.location || vehicle.store || [vehicle.loja, vehicle.cidade].filter(Boolean).join(' — ') || '';
 
     var article = el('article', 'vehicle-card');
     article.setAttribute('role', 'listitem');
-    article.setAttribute('aria-label', title);
 
     /* Image */
     var imgWrap = el('div', 'vehicle-image');
@@ -124,7 +124,7 @@
     }
 
     var priceEl = el('p', 'vehicle-body__price');
-    priceEl.appendChild(txt(fmtPrice(price)));
+    priceEl.appendChild(txt(fmtPrice(vehicle.price)));
     body.appendChild(priceEl);
 
     if (location) {
@@ -152,12 +152,14 @@
   }
 
   function render(sc) {
-    log('render', sc);
+    log('render | type=' + sc.type + ' | vehicles=' + (sc.vehicles ? sc.vehicles.length : 0));
     var app = document.getElementById('app');
-    if (!app) return;
+    if (!app) { log('ERRO: #app não encontrado'); return; }
     app.innerHTML = '';
 
     var vehicles = Array.isArray(sc.vehicles) ? sc.vehicles : (Array.isArray(sc.offers) ? sc.offers : []);
+    log('vehicles array length=' + vehicles.length);
+
     if (!vehicles.length) {
       renderEmpty('Nenhum veículo encontrado para essa busca.');
       return;
@@ -169,34 +171,63 @@
     for (var i = 0; i < vehicles.length; i++) {
       var v = vehicles[i];
       if (!v || typeof v !== 'object') continue;
-      grid.appendChild(buildCard(v, i));
+      grid.appendChild(buildCard(v));
     }
 
     app.appendChild(grid);
-    log('rendered', vehicles.length, 'cards');
+    log('renderizado | ' + vehicles.length + ' cards');
+  }
+
+  var _rendered = false;
+
+  function tryRender(sc) {
+    if (_rendered) return;
+    _rendered = true;
+    render(sc);
   }
 
   function init() {
-    log('loaded');
+    log('DOMContentLoaded');
+    log('window.openai', window.openai);
+    log('toolOutput', window.openai && window.openai.toolOutput);
 
     var payload = getToolOutput();
-    log('payload', payload);
-
+    log('payload inicial', payload);
     var sc = extractStructuredContent(payload);
-    log('structuredContent', sc);
+    log('structuredContent inicial', sc);
 
     if (sc) {
-      render(sc);
+      tryRender(sc);
       return;
     }
 
+    /* postMessage — ouve mensagens do host */
     window.addEventListener('message', function (event) {
-      if (TRUSTED_ORIGINS.indexOf(event.origin) === -1 && event.origin !== window.location.origin) return;
+      console.log('[vehicle-offers] postMessage recebido | origin=' + event.origin, event.data);
       var scFromMessage = extractStructuredContent(event.data);
-      if (scFromMessage) render(scFromMessage);
+      if (scFromMessage) tryRender(scFromMessage);
     });
 
-    renderEmpty('Aguardando dados dos veículos...');
+    /* Polling — toolOutput pode ser injetado após DOMContentLoaded */
+    var attempts = 0;
+    var timer = setInterval(function () {
+      attempts++;
+      var payload2 = getToolOutput();
+      console.log('[vehicle-offers] polling', attempts, payload2);
+      var sc2 = extractStructuredContent(payload2);
+      if (sc2) {
+        clearInterval(timer);
+        tryRender(sc2);
+        return;
+      }
+      if (attempts >= 50) {
+        clearInterval(timer);
+        if (!_rendered) {
+          log('timeout — sem dados após 5s');
+          renderEmpty('Não recebi os dados dos veículos.');
+        }
+      }
+    }, 100);
   }
 
   if (document.readyState === 'loading') {

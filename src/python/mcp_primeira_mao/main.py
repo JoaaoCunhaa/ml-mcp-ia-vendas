@@ -92,6 +92,8 @@ async def _openai_domain_challenge(request: Request) -> PlainTextResponse:
 # Útil para confirmar que openai/outputTemplate está no descriptor.
 @mcp.custom_route("/debug/inspect", methods=["GET"])
 async def _debug_inspect(request: Request) -> JSONResponse:
+    _BASE = "https://mcp-primeiramao.sagadatadriven.com.br"
+
     # ── tools_wire: exatamente o que ChatGPT lê em tools/list ──
     tools_wire = []
     try:
@@ -117,7 +119,17 @@ async def _debug_inspect(request: Request) -> JSONResponse:
     except Exception as e:
         resources_wire = [{"error": str(e)}]
 
-    # ── resources_read_preview: primeiros 300 chars do HTML de ui://vehicle-offers ──
+    # ── html_preview: HTML completo servido por ui://vehicle-offers (após substituição) ──
+    html_preview = None
+    try:
+        with open(os.path.join(_UI_DIR, "vehicle-offers.html"), "r", encoding="utf-8") as _f:
+            _raw = _f.read()
+        _served = _raw.replace("STATIC_BASE", f"{_BASE}/static")
+        html_preview = _served
+    except Exception as e:
+        html_preview = {"error": str(e)}
+
+    # ── resource_preview: MIME + primeiros 400 chars via MCP resource ──
     resource_preview = None
     try:
         result = await mcp.read_resource("ui://vehicle-offers")
@@ -126,30 +138,56 @@ async def _debug_inspect(request: Request) -> JSONResponse:
         text = getattr(content, "text", None) or getattr(content, "data", None) or str(content)
         resource_preview = {
             "mimeType": getattr(content, "mimeType", None) or getattr(content, "mime_type", None),
-            "preview":  str(text)[:300],
+            "preview":  str(text)[:400],
         }
     except Exception as e:
         resource_preview = {"error": str(e)}
 
-    # ── tool_call_preview: simula retorno de buscar_veiculos ──
-    tool_preview = None
+    # ── static_js_status / static_css_status: arquivos em disco ──
+    _js_path  = os.path.join(_UI_DIR, "vehicle-offers.js")
+    _css_path = os.path.join(_UI_DIR, "vehicle-offers.css")
+    static_js_status = {
+        "url":    f"{_BASE}/static/vehicle-offers.js",
+        "exists": os.path.isfile(_js_path),
+        "size":   os.path.getsize(_js_path) if os.path.isfile(_js_path) else 0,
+    }
+    static_css_status = {
+        "url":    f"{_BASE}/static/vehicle-offers.css",
+        "exists": os.path.isfile(_css_path),
+        "size":   os.path.getsize(_css_path) if os.path.isfile(_css_path) else 0,
+    }
+
+    # ── tool_result_preview: chama buscar_veiculos(Goiânia) e inspeciona o retorno ──
+    tool_result_preview = None
     try:
-        tool = await mcp.get_tool("buscar_veiculos")
-        if tool:
-            tool_preview = {
-                "name":                    tool.name,
-                "_meta.ui.resourceUri":    (tool.meta or {}).get("ui", {}).get("resourceUri"),
-                "_meta.outputTemplate":    (tool.meta or {}).get("openai/outputTemplate"),
+        _tool = await mcp.get_tool("buscar_veiculos")
+        if _tool:
+            _call = await _tool.run({"cidade": "Goiânia"})
+            _sc   = getattr(_call, "structured_content", None) or {}
+            _cnt  = getattr(_call, "content", None)
+            _content_text = None
+            if isinstance(_cnt, list) and _cnt:
+                _content_text = getattr(_cnt[0], "text", str(_cnt[0]))
+            elif _cnt:
+                _content_text = str(_cnt)
+            tool_result_preview = {
+                "content_text":                     _content_text,
+                "structuredContent_type":           _sc.get("type") if isinstance(_sc, dict) else None,
+                "structuredContent_vehicles_length": len(_sc.get("vehicles", [])) if isinstance(_sc, dict) else None,
+                "structuredContent_preview":        str(_sc)[:300] if _sc else None,
             }
     except Exception as e:
-        tool_preview = {"error": str(e)}
+        tool_result_preview = {"error": str(e)}
 
     return JSONResponse({
         "transport":           os.getenv("MCP_TRANSPORT", "stdio"),
         "tools_wire":          tools_wire,
         "resources_wire":      resources_wire,
+        "html_preview":        html_preview,
         "resource_preview":    resource_preview,
-        "tool_preview":        tool_preview,
+        "static_js_status":    static_js_status,
+        "static_css_status":   static_css_status,
+        "tool_result_preview": tool_result_preview,
     })
 
 

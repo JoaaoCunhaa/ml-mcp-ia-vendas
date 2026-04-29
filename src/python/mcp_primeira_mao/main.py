@@ -893,7 +893,14 @@ async def buscar_veiculo(
     return _renderizar_cards(sugestoes, mensagem=msg_f4, mostrar_placa=True)
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True, destructiveHint=False), app=_APP_COMPRA)
+@mcp.tool(
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True, destructiveHint=False),
+    app=_APP_COMPRA,
+    # openai/outputTemplate no nível raiz de _meta (tool descriptor) é o campo
+    # que o ChatGPT lê para saber qual URL carregar como widget iframe.
+    # AppConfig seta _meta.ui.resourceUri (MCP standard); este seta o alias OpenAI.
+    meta={"openai/outputTemplate": _WIDGET_URL},
+)
 async def buscar_veiculos(
     cidade: str,
     consulta: Optional[str] = None,
@@ -910,29 +917,26 @@ async def buscar_veiculos(
     """
     Exibe o widget visual interativo com cards de veículos seminovos (fotos, preço, botão de contato).
 
-    ═══ REGRA ABSOLUTA ═══
-    CHAME IMEDIATAMENTE assim que cidade for conhecida — com ou sem outros filtros.
-    NÃO faça nenhuma pergunta antes. NÃO peça marca, modelo, preço ou tipo antes de chamar.
-    NÃO espere o cliente informar mais detalhes. Chame agora com o que já tem.
+    ═══ REGRA ABSOLUTA — ANTES DE CHAMAR ═══
+    CHAME IMEDIATAMENTE assim que cidade for conhecida.
+    NÃO pergunte marca, modelo, tipo, preço ou qualquer filtro antes de chamar.
+    ÚNICO caso para perguntar: cidade não foi mencionada. Pergunte SÓ: "Em qual cidade?"
+    Se cidade já apareceu → chame AGORA com o que tem.
 
-    ÚNICO caso para perguntar ANTES de chamar: cidade não foi mencionada em nenhuma mensagem.
-    Nesse caso, pergunte APENAS: "Em qual cidade você está procurando o carro?"
-    NÃO pergunte faixa de preço, tipo, marca ou modelo junto — só a cidade, nada mais.
-
-    Se cidade já apareceu em qualquer mensagem anterior → chame AGORA, sem nenhuma pergunta.
-
-    ═══ APÓS CHAMAR ═══
-    PARE imediatamente. NÃO pergunte filtros adicionais. NÃO ofereça refinamentos.
-    NÃO diga "posso filtrar por marca/preço/tipo". NÃO liste opções de filtro.
-    Os cards são exibidos automaticamente. Aguarde o cliente interagir ou dar nome e telefone.
-    Se o cliente pedir refinamento espontaneamente (ex: "só Polo") → chame novamente com o filtro.
+    ═══ REGRA ABSOLUTA — APÓS RETORNAR ═══
+    O widget exibiu os cards. NÃO adicione texto. NÃO pergunte nada.
+    NÃO diga "posso filtrar por...", NÃO liste opções, NÃO sugira refinamentos.
+    Aguarde o cliente falar. Se ele disser "picape", "HB20", "automático", etc.
+    → chame buscar_veiculos IMEDIATAMENTE com esse filtro, sem perguntar mais nada.
+    Se ele disser nome + telefone → chame registrar_interesse_compra.
 
     ═══ EXEMPLOS ═══
-    "quero um carro em Goiânia"              → buscar_veiculos(cidade="Goiânia")
-    "estou procurando carro em goiania"      → buscar_veiculos(cidade="Goiânia")
-    "quero comprar um carro" (sem cidade)    → pergunte SÓ: "Em qual cidade?"
-    "tem Polo?" (cidade já mencionada)       → buscar_veiculos(cidade="Goiânia", modelo="Polo")
-    "HB20 até 60 mil em Brasília"            → buscar_veiculos(cidade="Brasília", modelo="HB20", preco_max=60000)
+    "quero um carro em Goiânia"            → buscar_veiculos(cidade="Goiânia")
+    "quero comprar um carro" (sem cidade)  → pergunte SÓ: "Em qual cidade?"
+    "tem Polo?" (cidade já mencionada)     → buscar_veiculos(cidade="Goiânia", modelo="Polo")
+    "HB20 até 60 mil em Brasília"          → buscar_veiculos(cidade="Brasília", modelo="HB20", preco_max=60000)
+    [após retorno] "picape"                → buscar_veiculos(cidade="Goiânia", modelo="picape")
+    [após retorno] "automático barato"     → buscar_veiculos(cidade="Goiânia", consulta="automático barato")
 
     Filtros opcionais — preencha APENAS com o que o cliente já informou espontaneamente:
     - marca, modelo, versao, consulta, preco_min, preco_max, km_max, ano_min, ano_max
@@ -994,16 +998,19 @@ async def buscar_veiculos(
     logger.info(f"[buscar_veiculos] → widget | n={n} | exibindo={len(veiculos_exibir)} | url={widget_url}")
 
     return _ToolResult(
-        content=TextContent(type="text", text=mensagem_header),
-        # structuredContent: dados concisos visíveis ao modelo — sem array de veículos
+        content=TextContent(
+            type="text",
+            text=f"[widget exibido] {mensagem_header}. NÃO adicione texto nem pergunte filtros.",
+        ),
+        # structuredContent: visível ao modelo — sem array de veículos
         # para evitar que o modelo gere tabela/markdown em cima deles.
         structured_content={
-            "title": mensagem_header,
-            "total": n,
-            "city":  cidade.upper(),
+            "status":  "cards_displayed",
+            "title":   mensagem_header,
+            "total":   n,
+            "city":    cidade.upper(),
         },
         # _meta: entregue apenas ao widget, nunca chega ao modelo (Apps SDK docs).
-        # Aqui ficam os cards completos e o searchContext.
         meta={
             "openai/outputTemplate": widget_url,
             "ui": {"layout": "card_grid"},
@@ -1016,7 +1023,11 @@ async def buscar_veiculos(
     )
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False, destructiveHint=False), app=_APP_VENDA)
+@mcp.tool(
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False, destructiveHint=False),
+    app=_APP_VENDA,
+    meta={"openai/outputTemplate": _WIDGET_URL},
+)
 async def exibir_formulario_venda(
     veiculo_descricao: str,
     placa: Optional[str] = None,

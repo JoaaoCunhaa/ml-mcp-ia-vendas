@@ -9,32 +9,54 @@ console.log("[vehicle-offers] inline JS carregado");
     console.log.apply(console, args);
   }
 
-  /* ── Bridge: lê toolOutput do proxy window.openai ── */
+  /* ── extractStructuredContent: aceita TODOS os formatos ── */
 
-  function getStructuredContentFromToolOutput() {
-    var output = window.openai && window.openai.toolOutput;
-    log('toolOutput', output);
-    if (!output) return null;
-    if (output.type === 'vehicle_cards' || output.mode === 'sell') return output;
-    var sc = output.structuredContent;
-    if (sc && (sc.type === 'vehicle_cards' || sc.mode === 'sell')) return sc;
-    return null;
-  }
+  function extractStructuredContent(payload) {
+    if (!payload) return null;
 
-  /* ── Extrai structuredContent de mensagens postMessage ── */
+    // Formato raiz direto: {type:"vehicle_cards", vehicles:[...]}
+    if (payload.type === 'vehicle_cards' && Array.isArray(payload.vehicles)) return payload;
+    // Modo venda direto: {mode:"sell", veiculo:...}
+    if (payload.mode === 'sell') return payload;
 
-  function extractFromMessage(data) {
-    if (!data) return null;
-    var candidates = [
-      data.params  && data.params.structuredContent,
-      data.toolOutput && data.toolOutput.structuredContent,
-      data.structuredContent,
-      data.params  && data.params.toolOutput && data.params.toolOutput.structuredContent,
-    ];
-    for (var i = 0; i < candidates.length; i++) {
-      var c = candidates[i];
-      if (c && (c.type === 'vehicle_cards' || c.mode === 'sell')) return c;
+    // Aninhado em .structuredContent
+    var sc = payload.structuredContent;
+    if (sc) {
+      if (sc.type === 'vehicle_cards' && Array.isArray(sc.vehicles)) return sc;
+      if (sc.mode === 'sell') return sc;
     }
+
+    // Aninhado em .toolOutput
+    var to = payload.toolOutput;
+    if (to) {
+      if (to.type === 'vehicle_cards' && Array.isArray(to.vehicles)) return to;
+      if (to.mode === 'sell') return to;
+      var tosc = to.structuredContent;
+      if (tosc) {
+        if (tosc.type === 'vehicle_cards' && Array.isArray(tosc.vehicles)) return tosc;
+        if (tosc.mode === 'sell') return tosc;
+      }
+    }
+
+    // Aninhado em .params.structuredContent (JSON-RPC)
+    if (payload.params) {
+      var psc = payload.params.structuredContent;
+      if (psc) {
+        if (psc.type === 'vehicle_cards' && Array.isArray(psc.vehicles)) return psc;
+        if (psc.mode === 'sell') return psc;
+      }
+      var pto = payload.params.toolOutput;
+      if (pto) {
+        if (pto.type === 'vehicle_cards' && Array.isArray(pto.vehicles)) return pto;
+        if (pto.mode === 'sell') return pto;
+        var ptosc = pto.structuredContent;
+        if (ptosc) {
+          if (ptosc.type === 'vehicle_cards' && Array.isArray(ptosc.vehicles)) return ptosc;
+          if (ptosc.mode === 'sell') return ptosc;
+        }
+      }
+    }
+
     return null;
   }
 
@@ -304,14 +326,12 @@ console.log("[vehicle-offers] inline JS carregado");
   function render(sc) {
     if (sc.mode === 'sell') { renderSell(sc); return; }
 
-    log('render | type=' + sc.type + ' | vehicles=' + (sc.vehicles ? sc.vehicles.length : 0));
+    log('render | vehicles=' + (sc.vehicles ? sc.vehicles.length : 0));
     var app = document.getElementById('app');
     if (!app) { log('ERRO: #app não encontrado'); return; }
     app.innerHTML = '';
 
     var vehicles = Array.isArray(sc.vehicles) ? sc.vehicles : (Array.isArray(sc.offers) ? sc.offers : []);
-    log('vehicles length=' + vehicles.length);
-
     if (!vehicles.length) { renderEmpty('Nenhum veículo encontrado para essa busca.'); return; }
 
     var grid = el('div', 'vehicle-grid');
@@ -337,49 +357,29 @@ console.log("[vehicle-offers] inline JS carregado");
     log('DOMContentLoaded');
     log('window.openai', window.openai);
 
-    var sc = getStructuredContentFromToolOutput();
+    var output = window.openai && window.openai.toolOutput;
+    log('toolOutput', output);
+
+    var sc = extractStructuredContent(output);
     if (sc) { tryRender(sc); return; }
 
     renderLoading('Carregando ofertas...');
 
-    /* Listener para todos os postMessages — loga o formato real do bridge */
+    /* postMessage listener — loga tudo e tenta extrair em qualquer formato */
     window.addEventListener('message', function (event) {
       log('raw message', event.data);
-      var data = event.data;
-      if (!data) return;
-
-      /* JSON-RPC: ui/notifications/tool-result (Apps SDK oficial) */
-      if (data.jsonrpc === '2.0' && data.method === 'ui/notifications/tool-result') {
-        var trSc = data.params && data.params.structuredContent;
-        log('tool-result structuredContent', trSc);
-        if (trSc && (trSc.type === 'vehicle_cards' || trSc.mode === 'sell')) { tryRender(trSc); return; }
-      }
-
-      /* openai:set_globals */
-      if (data.method === 'openai:set_globals') {
-        var globals = (data.params && data.params.globals) || (data.detail && data.detail.globals);
-        var gOutput = globals && globals.toolOutput;
-        if (gOutput) {
-          var gSc = (gOutput.type === 'vehicle_cards' || gOutput.mode === 'sell')
-            ? gOutput : gOutput.structuredContent;
-          if (gSc && (gSc.type === 'vehicle_cards' || gSc.mode === 'sell')) { tryRender(gSc); return; }
-        }
-      }
-
-      /* fallback genérico */
-      var fromMsg = extractFromMessage(data);
-      if (fromMsg) { tryRender(fromMsg); }
+      var sc2 = extractStructuredContent(event.data);
+      if (sc2) tryRender(sc2);
     });
 
-    /* window.openai.addEventListener (se o SDK expuser) */
+    /* window.openai.addEventListener (Apps SDK, se disponível) */
     try {
       if (window.openai && typeof window.openai.addEventListener === 'function') {
         window.openai.addEventListener('toolOutput', function (event) {
           log('openai toolOutput event', event);
-          var output = (event && event.detail) || event;
-          var evSc = (output && (output.type === 'vehicle_cards' || output.mode === 'sell'))
-            ? output : (output && output.structuredContent);
-          if (evSc && (evSc.type === 'vehicle_cards' || evSc.mode === 'sell')) tryRender(evSc);
+          var output2 = (event && event.detail) || event;
+          var sc3 = extractStructuredContent(output2);
+          if (sc3) tryRender(sc3);
         });
       }
     } catch (err) {

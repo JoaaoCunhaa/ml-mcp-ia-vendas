@@ -188,19 +188,28 @@ async def _debug_inspect(request: Request) -> JSONResponse:
         "size":   os.path.getsize(_css_path) if os.path.isfile(_css_path) else 0,
     }
 
-    # ── tool_result_preview: chama buscar_veiculos diretamente e inspeciona o retorno ──
+    # ── tool_result_preview: chama buscar_veiculos e inspeciona formato do retorno ──
     tool_result_preview = None
     try:
         _call = await buscar_veiculos(cidade="Goiânia")
         if isinstance(_call, _ToolResult):
-            _sc  = getattr(_call, "structured_content", None) or {}
+            _sc  = getattr(_call, "structured_content", None)
             _cnt = getattr(_call, "content", None)
             _content_text = getattr(_cnt, "text", str(_cnt)) if _cnt else None
+            _sc_dict = _sc if isinstance(_sc, dict) else {}
+            _vehicles = _sc_dict.get("vehicles", [])
             tool_result_preview = {
+                # Formato do retorno
+                "raw_tool_result_type":              type(_call).__name__,
+                "has_structured_content_attr":       _sc is not None,
+                "raw_tool_result":                   str(_sc)[:500] if _sc else None,
+                # Diagnóstico de formato
+                "has_root_vehicle_cards":            isinstance(_sc, dict) and _sc.get("type") == "vehicle_cards",
+                "has_structuredContent_vehicle_cards": False,  # structured_content IS the root, não aninhado
+                "vehicles_count":                    len(_vehicles),
+                # Detalhes
                 "content_text":                      _content_text,
-                "structuredContent_type":            _sc.get("type") if isinstance(_sc, dict) else None,
-                "structuredContent_vehicles_length": len(_sc.get("vehicles", [])) if isinstance(_sc, dict) else None,
-                "structuredContent_preview":         str(_sc)[:300] if _sc else None,
+                "first_vehicle_keys":                list(_vehicles[0].keys()) if _vehicles else [],
             }
         else:
             tool_result_preview = {"raw": str(_call)[:300]}

@@ -118,14 +118,14 @@ async def _debug_inspect(request: Request) -> JSONResponse:
     # ── resources_read_preview: primeiros 300 chars do HTML de ui://vehicle-offers ──
     resource_preview = None
     try:
-        results = await mcp.read_resource("ui://vehicle-offers")
-        if results:
-            content = results[0]
-            text = getattr(content, "text", None) or getattr(content, "data", None) or str(content)
-            resource_preview = {
-                "mimeType": getattr(content, "mimeType", None) or getattr(content, "mime_type", None),
-                "preview":  str(text)[:300],
-            }
+        result = await mcp.read_resource("ui://vehicle-offers")
+        contents = getattr(result, "contents", None) or []
+        content = contents[0] if contents else result
+        text = getattr(content, "text", None) or getattr(content, "data", None) or str(content)
+        resource_preview = {
+            "mimeType": getattr(content, "mimeType", None) or getattr(content, "mime_type", None),
+            "preview":  str(text)[:300],
+        }
     except Exception as e:
         resource_preview = {"error": str(e)}
 
@@ -1395,7 +1395,31 @@ async def diagnostico_registro(
     }
 
 
-logger.info("[meta-patch] AppConfig injeta _meta via to_mcp_tool() — sem patch adicional necessário")
+# Remove a chave "fastmcp" do _meta antes de enviar ao ChatGPT.
+# FastMCP injeta "fastmcp": {"tags": []} em todo _meta via get_meta().
+# Isso é ruído desnecessário no descriptor — o ChatGPT lê apenas as chaves que conhece.
+_WIDGET_TOOLS = {"buscar_veiculos", "exibir_formulario_venda"}
+
+_orig_to_mcp_tool = None
+
+def _patch_tool_meta(tool_cls):
+    orig = tool_cls.to_mcp_tool
+
+    def _to_mcp_tool_clean(self, **overrides):
+        mcp_tool = orig(self, **overrides)
+        if mcp_tool.meta and self.name in _WIDGET_TOOLS:
+            clean = {k: v for k, v in mcp_tool.meta.items() if k != "fastmcp"}
+            mcp_tool.meta = clean if clean else None
+        return mcp_tool
+
+    tool_cls.to_mcp_tool = _to_mcp_tool_clean
+
+try:
+    from fastmcp.tools.base import Tool as _FastMCPTool
+    _patch_tool_meta(_FastMCPTool)
+    logger.info(f"[meta-patch] to_mcp_tool patcheado — 'fastmcp' removido do _meta de: {_WIDGET_TOOLS}")
+except Exception as _e:
+    logger.warning(f"[meta-patch] Falha ao patchear to_mcp_tool: {_e}")
 
 
 if __name__ == "__main__":

@@ -55,7 +55,7 @@ html, body {
 
 /* ── Card ─────────────────────────────────────────────────── */
 .vehicle-card {
-  flex: 0 0 clamp(220px, 72vw, 280px);
+  flex: 0 0 clamp(220px, calc(50% - 8px), 300px);
   scroll-snap-align: start;
   background: var(--card-bg);
   border: 1px solid var(--border);

@@ -92,64 +92,62 @@ async def _openai_domain_challenge(request: Request) -> PlainTextResponse:
 # Útil para confirmar que openai/outputTemplate está no descriptor.
 @mcp.custom_route("/debug/inspect", methods=["GET"])
 async def _debug_inspect(request: Request) -> JSONResponse:
-    # ── Tools ──
-    tools_out = []
+    # ── tools_wire: exatamente o que ChatGPT lê em tools/list ──
+    tools_wire = []
     try:
-        tools = await mcp.list_tools()
-        for t in (tools or []):
-            tools_out.append({
-                "name":        t.name,
-                "description": (getattr(t, "description", "") or "")[:200],
-                "_meta":       getattr(t, "_meta", None) or getattr(t, "meta", None),
+        for t in (await mcp.list_tools() or []):
+            mcp_tool = t.to_mcp_tool()
+            tools_wire.append({
+                "name":  mcp_tool.name,
+                "_meta": mcp_tool.meta,
             })
     except Exception as e:
-        tools_out = [{"error": str(e)}]
+        tools_wire = [{"error": str(e)}]
 
-    # ── Resources ──
-    resources_out = []
+    # ── resources_wire: uri + mimeType camelCase (como o SDK serializa) ──
+    resources_wire = []
     try:
-        resources = await mcp.list_resources()
-        for r in (resources or []):
-            resources_out.append({
-                "uri":       str(getattr(r, "uri", r)),
-                "mime_type": getattr(r, "mime_type", None) or getattr(r, "mimeType", None),
+        for r in (await mcp.list_resources() or []):
+            resources_wire.append({
+                "uri":      str(getattr(r, "uri", r)),
+                "mimeType": getattr(r, "mimeType", None) or getattr(r, "mime_type", None),
             })
     except Exception as e:
-        resources_out = [{"error": str(e)}]
+        resources_wire = [{"error": str(e)}]
 
-    # ── Inspeciona buscar_veiculos em detalhe ──
-    buscar_detail = {}
+    # ── resources_read_preview: primeiros 300 chars do HTML de ui://vehicle-offers ──
+    resource_preview = None
+    try:
+        results = await mcp.read_resource("ui://vehicle-offers")
+        if results:
+            content = results[0]
+            text = getattr(content, "text", None) or getattr(content, "data", None) or str(content)
+            resource_preview = {
+                "mimeType": getattr(content, "mimeType", None) or getattr(content, "mime_type", None),
+                "preview":  str(text)[:300],
+            }
+    except Exception as e:
+        resource_preview = {"error": str(e)}
+
+    # ── tool_call_preview: simula retorno de buscar_veiculos ──
+    tool_preview = None
     try:
         tool = await mcp.get_tool("buscar_veiculos")
         if tool:
-            buscar_detail = {
-                "name":       tool.name,
-                "_meta":      getattr(tool, "_meta", None) or getattr(tool, "meta", None),
-                "tool_attrs": sorted([a for a in dir(tool) if not a.startswith("__")]),
+            tool_preview = {
+                "name":                    tool.name,
+                "_meta.ui.resourceUri":    (tool.meta or {}).get("ui", {}).get("resourceUri"),
+                "_meta.outputTemplate":    (tool.meta or {}).get("openai/outputTemplate"),
             }
     except Exception as e:
-        buscar_detail = {"error": str(e)}
-
-    # ── Wire format: converte via to_mcp_tool() — exatamente o que vai no tools/list ──
-    # Nota: mcp.types.Tool armazena como .meta (alias _meta no JSON wire)
-    wire_out = []
-    try:
-        tools_raw = await mcp.list_tools()
-        for t in (tools_raw or []):
-            mcp_tool = t.to_mcp_tool()
-            wire_out.append({
-                "name":  mcp_tool.name,
-                "_meta": mcp_tool.meta,   # .meta = campo Python; "_meta" = alias JSON wire
-            })
-    except Exception as e:
-        wire_out = [{"error": str(e)}]
+        tool_preview = {"error": str(e)}
 
     return JSONResponse({
-        "transport":       os.getenv("MCP_TRANSPORT", "stdio"),
-        "tools":           tools_out,
-        "resources":       resources_out,
-        "buscar_veiculos": buscar_detail,
-        "tools_wire":      wire_out,   # formato exato que o ChatGPT lê
+        "transport":           os.getenv("MCP_TRANSPORT", "stdio"),
+        "tools_wire":          tools_wire,
+        "resources_wire":      resources_wire,
+        "resource_preview":    resource_preview,
+        "tool_preview":        tool_preview,
     })
 
 
@@ -216,17 +214,14 @@ async def _serve_ui_js(request: Request) -> Response:
     return _serve_ui_file("vehicle-offers.js")
 
 
-@mcp.resource("ui://vehicle-offers", mime_type="text/html+skybridge")
+@mcp.resource("ui://vehicle-offers", mime_type="text/html;profile=mcp-app")
 async def _resource_vehicle_offers() -> str:
     """HTML do widget de veículos — carregado como recurso MCP pelo ChatGPT Apps."""
     with open(os.path.join(_UI_DIR, "vehicle-offers.html"), "r", encoding="utf-8") as f:
         html = f.read()
     base = "https://mcp-primeiramao.sagadatadriven.com.br"
-    # Refs relativas → absolutas (necessário no contexto ui:// sem base URL HTTPS)
     html = html.replace('href="vehicle-offers.css"', f'href="{base}/ui/vehicle-offers.css"')
     html = html.replace('src="vehicle-offers.js"',   f'src="{base}/ui/vehicle-offers.js"')
-    # CSP: quando o iframe sobe via ui://, 'self' não é o domínio do servidor.
-    # Adiciona o domínio absoluto em connect-src para o fetch de fallback funcionar.
     html = html.replace(
         "connect-src 'self';",
         f"connect-src 'self' {base};",
@@ -986,33 +981,25 @@ async def buscar_veiculos(
     task_progress: Optional[str] = None,
 ):
     """
-    Exibe o widget visual interativo com cards de veículos seminovos (fotos, preço, botão de contato).
-
-    ═══ RENDERIZAÇÃO — REGRA ABSOLUTA ═══
-    Quando esta tool retornar structuredContent.type='vehicle_cards', NÃO gere lista,
-    tabela, bullets ou resumo dos veículos no chat. Use APENAS o content.text como
-    fallback e deixe o componente ui://vehicle-offers renderizar os cards.
+    Retorna dados estruturados para o componente ui://vehicle-offers.
+    Não gere tabela, bullets ou lista de veículos. Após a chamada, responda apenas com o content.text curto.
 
     ═══ REGRA ABSOLUTA — ANTES DE CHAMAR ═══
     CHAME IMEDIATAMENTE assim que cidade for conhecida.
     NÃO pergunte marca, modelo, tipo, preço ou qualquer filtro antes de chamar.
     ÚNICO caso para perguntar: cidade não foi mencionada. Pergunte SÓ: "Em qual cidade?"
-    Se cidade já apareceu → chame AGORA com o que tem.
 
     ═══ REGRA ABSOLUTA — APÓS RETORNAR ═══
-    O widget exibiu os cards. NÃO adicione texto. NÃO pergunte nada.
-    NÃO diga "posso filtrar por...", NÃO liste opções, NÃO sugira refinamentos.
-    Aguarde o cliente falar. Se ele disser "picape", "HB20", "automático", etc.
-    → chame buscar_veiculos IMEDIATAMENTE com esse filtro, sem perguntar mais nada.
+    NÃO adicione texto. NÃO liste carros. NÃO descreva modelos, preços ou km.
+    NÃO gere tabela, bullets, Markdown ou JSON com veículos.
+    Aguarde o cliente falar. Se ele disser "picape", "HB20", etc.
+    → chame buscar_veiculos IMEDIATAMENTE com esse filtro.
     Se ele disser nome + telefone → chame registrar_interesse_compra.
 
     ═══ EXEMPLOS ═══
-    "quero um carro em Goiânia"            → buscar_veiculos(cidade="Goiânia")
-    "quero comprar um carro" (sem cidade)  → pergunte SÓ: "Em qual cidade?"
-    "tem Polo?" (cidade já mencionada)     → buscar_veiculos(cidade="Goiânia", modelo="Polo")
-    "HB20 até 60 mil em Brasília"          → buscar_veiculos(cidade="Brasília", modelo="HB20", preco_max=60000)
-    [após retorno] "picape"                → buscar_veiculos(cidade="Goiânia", modelo="picape")
-    [após retorno] "automático barato"     → buscar_veiculos(cidade="Goiânia", consulta="automático barato")
+    "quero um carro em Goiânia"       → buscar_veiculos(cidade="Goiânia")
+    "tem Polo?" (cidade já conhecida) → buscar_veiculos(cidade="Goiânia", modelo="Polo")
+    "HB20 até 60 mil em Brasília"     → buscar_veiculos(cidade="Brasília", modelo="HB20", preco_max=60000)
 
     Filtros opcionais — preencha APENAS com o que o cliente já informou espontaneamente:
     - marca, modelo, versao, consulta, preco_min, preco_max, km_max, ano_min, ano_max
@@ -1085,10 +1072,9 @@ async def buscar_veiculos(
     return _ToolResult(
         content=TextContent(
             type="text",
-            text=f"Encontrei {n} veículos em {cidade.upper()}. Carregando os cards abaixo.",
+            text=f"Encontrei veículos em {cidade}. Veja os cards abaixo.",
         ),
         structured_content=sc,
-        meta={"ui": {"layout": "card_grid"}},
     )
 
 

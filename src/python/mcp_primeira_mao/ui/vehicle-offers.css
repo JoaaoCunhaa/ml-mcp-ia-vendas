@@ -5,7 +5,7 @@
 }
 
 :root {
-  --bg:        #212121;
+  --bg:        #ffffff;
   --card-bg:   #212121;
   --border:    rgba(255,255,255,0.09);
   --text-1:    #ffffff;
@@ -19,6 +19,7 @@
 
 html, body {
   width: 100%;
+  height: 100%;
   min-height: 100%;
   background: var(--bg);
   color: var(--text-1);
@@ -26,11 +27,10 @@ html, body {
   font-size: 14px;
   line-height: 1.4;
   -webkit-font-smoothing: antialiased;
-  border-radius: 22px;
-  overflow: hidden;
 }
 
 #app {
+  min-height: 100vh;
   padding: 16px 0;
 }
 
@@ -38,7 +38,7 @@ html, body {
 .carousel-header {
   font-size: 15px;
   font-weight: 600;
-  color: var(--text-1);
+  color: #111111;
   letter-spacing: -0.01em;
   margin-bottom: 14px;
   padding: 0 16px;
@@ -73,17 +73,17 @@ html, body {
   flex: 0 0 clamp(220px, calc(50% - 8px), 300px);
   scroll-snap-align: start;
   background: var(--card-bg);
-  border: 1px solid var(--border);
+  border: 1px solid rgba(255,255,255,0.06);
   border-radius: var(--radius);
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  box-shadow: 0 2px 14px rgba(0,0,0,0.14);
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .vehicle-card:hover {
-  border-color: rgba(255,255,255,0.18);
-  box-shadow: 0 8px 28px rgba(0,0,0,0.55);
+  box-shadow: 0 8px 28px rgba(0,0,0,0.28);
 }
 
 /* ── Setas laterais (estilo Localiza) ─────────────────────── */
@@ -266,7 +266,7 @@ html, body {
   justify-content: center;
   min-height: 180px;
   font-size: 14px;
-  color: var(--text-2);
+  color: #6b7280;
   text-align: center;
   padding: 24px;
 }

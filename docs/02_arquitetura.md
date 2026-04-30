@@ -1,220 +1,254 @@
-# Arquitetura: MCP Primeira Mão Saga
+# Arquitetura — MCP Primeira Mão Saga
 
 ---
 
 ## Camadas
 
-| Camada | Componente | Responsabilidade |
-|---|---|---|
-| **Interface** | FastMCP (SSE / stdio) | Expõe tools e resources para LLMs (ChatGPT, Claude) e MCP Inspector |
-| **Widget** | `ui/vehicle-offers.js` + `.css` | Carrossel de veículos e formulário de venda — renderizado no iframe do ChatGPT Apps |
-| **Resources MCP** | `ui://vehicle-offers` | HTML inline com payload de compra embutido (`_LAST_BUY_PAYLOAD`) |
-| **Resources MCP** | `ui://vehicle-sell` | HTML inline com payload de venda embutido (`_LAST_SELL_PAYLOAD`) |
-| **Tools** | `main.py` | 9 tools + funções internas de lead + helpers de busca e renderização |
-| **Lead interno** | `_criar_lead_compra` | Cria lead BUY no CRM Mobiauto + dispara webhook compra |
-| **Lead interno** | `_criar_lead_venda` | Cria lead SELL no CRM Mobiauto + dispara webhook venda |
-| **Lead interno** | `_disparar_webhook` | POST async para endpoints n8n (compra / venda) |
-| **Serviços** | `LambdaInventoryService` | GET para Lambda AWS com filtros; normaliza resposta para o contrato do widget |
-| **Serviços** | `MobiautoProposalService` | POST `/api/proposal/v1.0/{dealer_id}` — cria proposta no CRM Mobiauto |
-| **Serviços** | `InventoryAggregator` | Fallback Mobiauto — busca paralela por loja, paginação, cache |
-| **Serviços** | `FipeService` | Consulta FIPE pela placa com retry (3x, 60 s timeout) |
-| **Serviços** | `PricingService` | Envia payload para API de precificação Saga e retorna proposta |
-| **Dados** | `MobiautoService` | Token Mobiauto + busca de estoque por dealer (fallback) |
-| **Dados** | `postgres_client` | Retorna lista de lojas do PostgreSQL ou CSV fallback |
-| **Utilitários** | `helpers.py` | Normalização de placa |
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Cliente                                                    │
+│  ChatGPT App (iframe widget) / MCP Inspector / Claude       │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ SSE / stdio
+┌──────────────────────────▼──────────────────────────────────┐
+│  MCP Server  (FastMCP 3.2.2 · Python 3.13 · porta 8000)    │
+│                                                             │
+│  Resources MCP                  Tools MCP                   │
+│  ├── ui://vehicle-offers        ├── buscar_veiculos          │
+│  └── ui://vehicle-sell          ├── registrar_interesse_*    │
+│                                 ├── avaliar_veiculo          │
+│  HTTP Routes                    ├── exibir_formulario_venda  │
+│  ├── /api/ofertas               ├── buscar_veiculo           │
+│  ├── /ui/vehicle-offers.*       ├── estoque_total            │
+│  ├── /local/test                ├── listar_lojas             │
+│  ├── /local/ofertas             └── diagnostico_registro     │
+│  ├── /local/formulario-venda                                 │
+│  ├── /local/registrar-compra                                 │
+│  └── /local/registrar-venda                                  │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+        ┌──────────────────┼────────────────────┐
+        ▼                  ▼                    ▼
+┌───────────────┐  ┌───────────────┐  ┌─────────────────────┐
+│ Lambda AWS    │  │ Mobiauto      │  │ APIs Saga           │
+│ → Athena      │  │ Estoque + CRM │  │ FIPE + Pricing      │
+└───────────────┘  └───────────────┘  └─────────────────────┘
+        ▼                  ▼
+┌───────────────┐  ┌───────────────┐
+│ n8n Webhooks  │  │ PostgreSQL    │
+│ (notificações)│  │ (lojas mock)  │
+└───────────────┘  └───────────────┘
+```
 
 ---
 
-## Serviços externos
+## Componentes principais
 
-| API | Endpoint base | Uso |
-|---|---|---|
-| **Lambda AWS — Estoque** | Configurado via `LAMBDA_ESTOQUE_URL` | Consulta Athena (`modelled.pm_*`) e retorna veículos ativos filtrados por cidade |
-| **Mobiauto — Estoque** | `open-api.mobiauto.com.br/api/dealer/{id}/inventory/v1.0` | Fallback de estoque (desabilitado por padrão) |
-| **Mobiauto — CRM** | `open-api.mobiauto.com.br/api/proposal/v1.0/{dealer_id}` | Criação de lead/proposta (compra ou venda) |
-| **FIPE Saga** | `{PRECIFICACAO_API_URL}/fipe` | Dados técnicos e valor FIPE pela placa |
-| **Pricing Saga** | `{PRECIFICACAO_API_URL}/carro/compra` | Proposta de compra/troca |
-| **Token AWS** | `URL_AWS_TOKEN` + `MOBI_SECRET` | Bearer token para autenticar na Mobiauto (estoque + CRM) |
-| **Webhook Compra** | `automatemaiawh.sagadatadriven.com.br/webhook/cliente_quer_comprar` | Notificação n8n quando lead de compra é criado |
-| **Webhook Venda** | `automatemaiawh.sagadatadriven.com.br/webhook/cliente_quer_vender` | Notificação n8n quando lead de venda é criado |
+### `main.py` (1.664 linhas)
+
+Arquivo central do servidor. Contém:
+
+- **Configuração de AppConfig**: associa tools a recursos MCP para o ChatGPT Apps
+- **Rotas HTTP**: endpoints REST (`/api/`, `/local/`, `/ui/`, `/debug/`)
+- **Resources MCP**: `ui://vehicle-offers` (compra) e `ui://vehicle-sell` (venda)
+- **9 tools MCP**: ver seção Tools
+- **Funções internas**: criação de lead, formatação de card, scoring de busca, webhook
+- **Meta-patching**: remove metadados do framework `fastmcp` dos descritores de tools/resources
+
+### `services/`
+
+| Arquivo | Propósito |
+|---|---|
+| `lambda_inventory_service.py` | Fonte primária de estoque via AWS Lambda + Athena |
+| `inventory_aggregator.py` | Estoque Mobiauto (fallback) + busca paginada por lojas |
+| `fipe_service.py` | Consulta FIPE por placa com retry (3×, 60s timeout) |
+| `pricing_service.py` | Calcula proposta de compra via API interna |
+| `mobiauto_service.py` | Token Mobiauto com cache + consulta de estoque por dealer |
+| `mobiauto_proposal_service.py` | Criação de leads no CRM Mobiauto (BUY e SELL) |
+
+### `database/postgres_client.py`
+
+Carrega lista de lojas. Em produção usa PostgreSQL; atualmente usa `lojas_mock.csv` como fonte padrão.
+
+### `ui/`
+
+| Arquivo | Propósito |
+|---|---|
+| `vehicle-offers.html` | Shell HTML do widget (placeholder, usado em testes estáticos) |
+| `vehicle-offers.css` | Estilos do widget (design system dark, Tailwind-inspired) |
+| `vehicle-offers.js` | Lógica do widget: carrossel de compra + formulário de venda |
+| `test_widget.html` | Página de teste local (acessada via `/local/test`) |
 
 ---
 
-## Widget — recursos MCP separados por modo
+## Widget ChatGPT Apps
 
-Para evitar race condition entre sessões concorrentes, os payloads de compra e venda são armazenados em variáveis globais distintas e servidos por resources MCP diferentes:
+### Arquitetura do widget
 
-| Variável | Setada por | Resource MCP | Template |
-|---|---|---|---|
-| `_LAST_BUY_PAYLOAD` | `buscar_veiculos` | `ui://vehicle-offers` | `openai/outputTemplate` de `buscar_veiculos` |
-| `_LAST_SELL_PAYLOAD` | `exibir_formulario_venda` | `ui://vehicle-sell` | `openai/outputTemplate` de `exibir_formulario_venda` |
+O ChatGPT Apps renderiza recursos MCP em iframes. O servidor mantém **dois recursos separados** para evitar race conditions entre sessões concorrentes:
 
-Ambos os resources servem o mesmo `vehicle-offers.js` / `vehicle-offers.css` (inlined), com hashes SHA-256 registrados em `openai/widgetCSP` para CSP do ChatGPT Apps.
+| Recurso MCP | Tool associada | Payload armazenado |
+|---|---|---|
+| `ui://vehicle-offers` | `buscar_veiculos` | `_LAST_BUY_PAYLOAD` |
+| `ui://vehicle-sell` | `exibir_formulario_venda` | `_LAST_SELL_PAYLOAD` |
+
+### Como o widget recebe dados
+
+1. **`toolOutput` (preferencial)**: O ChatGPT injeta `window.openai.toolOutput` com o `structured_content` da tool call mais recente. O JS polling detecta mudança de referência a cada 300ms e re-renderiza.
+
+2. **`#vehicle-data` embutido (fallback)**: O HTML do recurso embute o payload em `<script type="application/json" id="vehicle-data">`. Usado quando `toolOutput` ainda não está disponível.
+
+A prioridade é sempre `toolOutput` — garante que uma nova pesquisa substitua dados em cache do HTML do recurso.
+
+### Bridge widget → tool (registro de interesse)
+
+Quando o cliente clica em "Confirmar interesse" no carrossel, o widget chama a tool MCP diretamente:
+
+```javascript
+window.openai.callTool("registrar_interesse_compra", { ... })
+```
+
+O ChatGPT executa a tool no servidor e o resultado é exibido ao cliente. O mesmo padrão é usado para `registrar_interesse_venda` no formulário de venda.
+
+### UX do formulário de interesse (carrossel de compra)
+
+Clicar em "Tenho interesse" em **qualquer card** abre o formulário de contato em **todos os cards simultaneamente**. O cliente escolhe em qual card enviar. Cada card envia o lead individualmente com os dados do veículo correspondente.
+
+---
+
+## Tools MCP
+
+### `buscar_veiculos`
+- **Fonte**: `LambdaInventoryService.buscar()` (primária) → Mobiauto (fallback)
+- **Filtros**: cidade (obrigatório), marca, modelo, versão, preço mínimo/máximo, KM máximo, ano mínimo/máximo
+- **Saída**: `structured_content` com `type: "vehicle_cards"` + lista de veículos + contexto de busca
+- **App**: `_APP_COMPRA` → abre widget `ui://vehicle-offers`
+
+### `registrar_interesse_compra`
+- **Chamada por**: widget via `window.openai.callTool` (não pelo LLM diretamente)
+- **Ações**: cria lead BUY no Mobiauto + dispara webhook `cliente_quer_comprar` no n8n
+- **Retorna**: `registrado: true/false`, `dealer_id`, `fallback_url`
+
+### `avaliar_veiculo`
+- **Etapa 1**: `FipeService.consultar_por_placa()` — obtém marca, modelo, versão, valor FIPE
+- **Etapa 2**: `PricingService.calcular_compra()` — calcula proposta com KM, UF, cor, existe zero km
+- **Saída**: Markdown com dados do veículo + proposta. Deve chamar `exibir_formulario_venda()` imediatamente após.
+
+### `exibir_formulario_venda`
+- **App**: `_APP_VENDA` → abre widget `ui://vehicle-sell` em modo formulário
+- **Saída**: `structured_content` com `mode: "sell"` + dados da avaliação
+
+### `registrar_interesse_venda`
+- **Chamada por**: widget via `window.openai.callTool`
+- **Ações**: cria lead SELL no Mobiauto + dispara webhook `cliente_quer_venda` no n8n
+
+### `buscar_veiculo`
+- Busca textual em 4 fases progressivas:
+  1. Busca por ID/placa exata
+  2. AND (todas as palavras-chave)
+  3. OR com scoring
+  4. Sugestões de fallback
+- Saída: Markdown com cards
+
+### `estoque_total`, `listar_lojas`, `diagnostico_registro`
+- Funções auxiliares; sem widget; saída em Markdown ou JSON
+
+---
+
+## Fluxo de resolução de dealer_id
+
+Para criar um lead no CRM Mobiauto, é necessário um `dealer_id`. A resolução segue a hierarquia:
+
+1. Nome da loja → lookup na lista de lojas
+2. UF do veículo → primeira loja do estado
+3. Primeira loja da lista (fallback final)
+
+---
+
+## Rotas HTTP expostas
+
+| Rota | Método | Propósito |
+|---|---|---|
+| `/sse` | GET | Endpoint MCP principal (SSE transport) |
+| `/api/ofertas` | GET | JSON de veículos (usado pelo widget em produção) |
+| `/ui/vehicle-offers.html` | GET | Shell HTML estático |
+| `/ui/vehicle-offers.css` | GET | CSS do widget |
+| `/ui/vehicle-offers.js` | GET | JS do widget |
+| `/static/vehicle-offers.css` | GET | CSS (alias para produção) |
+| `/static/vehicle-offers.js` | GET | JS (alias para produção) |
+| `/local/test` | GET | Página de teste visual (localhost only) |
+| `/local/ofertas` | GET | JSON de veículos (localhost only) |
+| `/local/formulario-venda` | GET | JSON do formulário de venda (localhost only) |
+| `/local/registrar-compra` | POST | Teste de criação de lead compra (localhost only) |
+| `/local/registrar-venda` | POST | Teste de criação de lead venda (localhost only) |
+| `/debug/inspect` | GET | Metadados de diagnóstico do servidor |
+| `/.well-known/openai-apps-challenge` | GET | Verificação de domínio OpenAI |
 
 ---
 
 ## Cache em memória
 
-| Cache | Onde | O que guarda |
+| Dado | Onde | Duração |
 |---|---|---|
-| `_token_cache` | `MobiautoService` | Bearer token Mobiauto — renovado automaticamente no 401 |
-| `_lojas_cache` | `InventoryAggregator` | Lista de lojas + fonte (`banco` ou `mock`) — carregado uma vez por sessão |
+| Token Mobiauto (estoque) | `mobiauto_service._token_cache` | Até 401 |
+| Token Mobiauto (CRM) | `mobiauto_proposal_service._token_cache` | Até 401 |
+| Lista de lojas | `inventory_aggregator._lojas_cache` | Sessão |
+| Último payload de compra | `main._LAST_BUY_PAYLOAD` | Sessão |
+| Último payload de venda | `main._LAST_SELL_PAYLOAD` | Sessão |
 
 ---
 
-## Configurações (`config.py` / `.env`)
+## Configuração de ambiente
 
-| Variável | Padrão | Descrição |
+| Variável | Obrigatória | Descrição |
 |---|---|---|
-| `MCP_TRANSPORT` | `stdio` | `stdio` para Inspector/local, `sse` para produção |
-| `PORT` | `8000` | Porta SSE em produção |
-| `DB_HOST / DB_NAME / DB_USER / DB_PASSWORD / DB_PORT` | — | PostgreSQL para lista de lojas |
-| `LAMBDA_ESTOQUE_URL` | — | URL do API Gateway da Lambda de estoque |
-| `LAMBDA_API_KEY` | — | Chave de autenticação da Lambda (`x-api-key`) |
-| `PRECIFICACAO_API_URL` | — | Base URL das APIs FIPE e Pricing |
-| `API_TIMEOUT` | `20` s | Timeout geral |
-| `MOBI_SECRET` | — | Segredo para obter token Mobiauto |
-| `URL_AWS_TOKEN` | — | Endpoint do token Mobiauto |
-| `OPENAI_CHALLENGE_TOKEN` | — | Token para verificação de domínio OpenAI (`/.well-known/openai-apps-challenge`) |
+| `MCP_TRANSPORT` | Sim | `sse` (HTTP) ou `stdio` (MCP Inspector) |
+| `PORT` | Não (padrão 8000) | Porta HTTP |
+| `DB_HOST/NAME/USER/PASSWORD/PORT` | Sim | PostgreSQL |
+| `MOBI_SECRET` | Sim | Secret para token Mobiauto |
+| `URL_AWS_TOKEN` | Sim | Endpoint AWS para token |
+| `PRECIFICACAO_API_URL` | Sim | URL da API de precificação |
+| `LAMBDA_ESTOQUE_URL` | Sim | URL da Lambda de estoque |
+| `LAMBDA_API_KEY` | Sim | Chave de autenticação da Lambda |
+| `OPENAI_CHALLENGE_TOKEN` | Sim | Token de verificação de domínio OpenAI |
+| `API_TIMEOUT` | Não (padrão 30s) | Timeout geral de APIs |
 
 ---
 
-## Diagrama de componentes
+## Deploy (produção)
 
-```mermaid
-flowchart TB
-    subgraph Interface
-        LLM["ChatGPT App / Claude"]
-        INSP["MCP Inspector"]
-    end
-
-    subgraph Widget["Widget ChatGPT Apps (iframe)"]
-        WG_BUY["ui://vehicle-offers\nCarrossel de compra"]
-        WG_SELL["ui://vehicle-sell\nFormulário de venda"]
-    end
-
-    subgraph MCP_Server["Servidor MCP (Python / FastMCP · SSE)"]
-        MAIN["main.py\n9 tools + helpers"]
-        LEAD_C["_criar_lead_compra\n(BUY)"]
-        LEAD_V["_criar_lead_venda\n(SELL)"]
-        WH["_disparar_webhook\n(POST n8n)"]
-        PROP_S["MobiautoProposalService\nPOST /api/proposal"]
-        LAMBDA_S["LambdaInventoryService\nGET Lambda AWS"]
-        AGG["InventoryAggregator\nfallback Mobiauto"]
-        FIPE_S["FipeService\nretry 3x · 60s"]
-        PRICE_S["PricingService\n20s timeout"]
-        MOBI_S["MobiautoService\ncache token · 401 refresh"]
-        DB["postgres_client\nPostgreSQL → CSV fallback"]
-    end
-
-    subgraph APIs_Externas["APIs Externas"]
-        LAMBDA_API["Lambda AWS\nAthena · pm_deal · status=1"]
-        MOBI_CRM["Mobiauto CRM\n/api/proposal/v1.0"]
-        FIPE_API["API FIPE Saga"]
-        PRICE_API["API Pricing Saga"]
-        TOKEN_API["AWS Token\n(Mobiauto auth)"]
-        N8N_C["Webhook Compra\nn8n"]
-        N8N_V["Webhook Venda\nn8n"]
-    end
-
-    subgraph Dados_Locais
-        PG[("PostgreSQL\nlojas_ids_mobigestor")]
-        CSV["lojas_mock.csv\n(fallback)"]
-    end
-
-    LLM <-->|SSE| MAIN
-    INSP <-->|stdio| MAIN
-    MAIN -->|toolOutput / resource HTML| WG_BUY
-    MAIN -->|toolOutput / resource HTML| WG_SELL
-    WG_BUY -->|callTool registrar_interesse_compra| MAIN
-    WG_SELL -->|callTool registrar_interesse_venda| MAIN
-
-    MAIN --> LAMBDA_S
-    MAIN --> FIPE_S
-    MAIN --> PRICE_S
-    MAIN --> LEAD_C
-    MAIN --> LEAD_V
-
-    LEAD_C --> PROP_S
-    LEAD_C --> WH
-    LEAD_V --> PROP_S
-    LEAD_V --> WH
-
-    PROP_S --> MOBI_CRM
-    WH --> N8N_C
-    WH --> N8N_V
-
-    LAMBDA_S --> LAMBDA_API
-    AGG --> MOBI_S
-    AGG --> DB
-
-    MOBI_S --> TOKEN_API
-
-    FIPE_S --> FIPE_API
-    PRICE_S --> PRICE_API
-
-    DB --> PG
-    DB --> CSV
-```
+- **Orquestrador**: Docker Swarm
+- **Imagem**: `mcp-primeira-mao:v3.2.26`
+- **Nó**: `maiamanager`
+- **Reverse proxy**: Traefik com TLS automático
+- **Domínio**: `mcp-primeiramao.sagadatadriven.com.br`
+- **SSE buffering**: desabilitado via header `X-Accel-Buffering: no` (obrigatório para SSE funcionar através do Traefik)
 
 ---
 
 ## Estrutura de arquivos
 
 ```
-src/python/mcp_primeira_mao/
-├── main.py                          # 9 tools + resources MCP + endpoints HTTP
-│                                    #   buscar_veiculos / buscar_veiculo / estoque_total
-│                                    #   listar_lojas / avaliar_veiculo
-│                                    #   exibir_formulario_venda
-│                                    #   registrar_interesse_compra / registrar_interesse_venda
-│                                    #   diagnostico_registro
-│                                    #   _criar_lead_compra / _criar_lead_venda
-│                                    #   _disparar_webhook / _veiculo_para_card
-│                                    #   _build_widget_html / _safe_json_embed
-│                                    #   _LAST_BUY_PAYLOAD / _LAST_SELL_PAYLOAD
-├── config.py                        # Variáveis de ambiente e logger
-├── .env                             # Secrets (não versionado)
-├── Dockerfile                       # python:3.11-slim; COPY . .; CMD python main.py
-├── docker-compose.yml               # Swarm deploy em maiamanager (Traefik + SSE middleware)
-├── requirements.txt                 # fastmcp==3.2.2, mcp==1.26.0, httpx, etc.
-├── ui/
-│   ├── vehicle-offers.html          # Shell HTML (STATIC_BASE — usado pelo endpoint /ui/)
-│   ├── vehicle-offers.css           # Estilos: carrossel, cards, formulário de interesse
-│   └── vehicle-offers.js            # Lógica: render, polling toolOutput, callTool bridge
-├── services/
-│   ├── lambda_inventory_service.py  # GET Lambda AWS → normaliza veículo para contrato do widget
-│   ├── mobiauto_proposal_service.py # POST /api/proposal → cria lead no CRM Mobiauto
-│   ├── inventory_aggregator.py      # Fallback Mobiauto: paginação, gather, cache de lojas
-│   ├── mobiauto_service.py          # Token Mobiauto + busca de estoque por dealer
-│   ├── fipe_service.py              # Cliente FIPE com retry (3x, 60s)
-│   └── pricing_service.py           # Cliente API de precificação Saga
+mcp_primeira_mao/
+├── main.py                          # Servidor MCP principal
+├── config.py                        # Carregamento de variáveis de ambiente
+├── docker-compose.yml               # Deploy em Swarm
+├── Dockerfile                       # Imagem do container
+├── requirements.txt                 # Dependências Python
 ├── database/
-│   ├── postgres_client.py           # Consulta lojas (PostgreSQL ou CSV fallback)
-│   └── lojas_mock.csv               # Lojas Saga (fallback local)
+│   └── postgres_client.py           # Client PostgreSQL + fallback CSV
+├── services/
+│   ├── lambda_inventory_service.py  # Fonte primária: Lambda AWS
+│   ├── inventory_aggregator.py      # Fonte secundária: Mobiauto estoque
+│   ├── fipe_service.py              # Consulta FIPE por placa
+│   ├── pricing_service.py           # Cálculo de proposta de compra
+│   ├── mobiauto_service.py          # Token + estoque Mobiauto
+│   └── mobiauto_proposal_service.py # Criação de leads no CRM
+├── ui/
+│   ├── vehicle-offers.html          # Shell HTML (testes estáticos)
+│   ├── vehicle-offers.css           # Estilos do widget
+│   ├── vehicle-offers.js            # Lógica do widget
+│   └── test_widget.html             # Página de teste local
 └── utils/
-    └── helpers.py                   # normalizar_placa
-
-src/lambdas/nomedoprojeto/
-├── handler.py                       # Lambda AWS: SELECT Athena com filtro d.status=1
-└── utils.py                         # Helpers de log e serialização JSON
+    └── helpers.py                   # normalizar_placa, formatar_moeda, etc.
 ```
-
----
-
-## Rotas HTTP expostas pelo servidor MCP
-
-| Método | Rota | Descrição |
-|---|---|---|
-| `GET` | `/ui/vehicle-offers.html` | Widget HTML com `text/html;profile=mcp-app` |
-| `GET` | `/ui/vehicle-offers.css` | CSS do widget |
-| `GET` | `/ui/vehicle-offers.js` | JS do widget |
-| `GET` | `/static/vehicle-offers.css` | Alias CSS (sem CSP meta) |
-| `GET` | `/static/vehicle-offers.js` | Alias JS (sem CSP meta) |
-| `GET` | `/api/ofertas` | Endpoint público: veículos por cidade + filtros |
-| `GET` | `/local/ofertas` | Endpoint de teste local |
-| `GET` | `/local/formulario-venda` | Teste local do formulário de venda |
-| `POST` | `/local/registrar-compra` | Teste local de lead de compra |
-| `POST` | `/local/registrar-venda` | Teste local de lead de venda |
-| `GET` | `/debug/inspect` | Diagnóstico completo: tools, resources, hashes CSP, payloads |
-| `GET` | `/.well-known/openai-apps-challenge` | Verificação de domínio OpenAI |

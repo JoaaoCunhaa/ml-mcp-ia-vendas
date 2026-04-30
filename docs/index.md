@@ -1,49 +1,69 @@
 # MCP Primeira Mão Saga
 
-Documentação técnica do servidor **Model Context Protocol (MCP)** do programa **Primeira Mão** do Grupo Saga — integração entre LLMs e o estoque de seminovos em tempo real.
+Documentação do servidor **Model Context Protocol (MCP)** do programa **Primeira Mão** do Grupo Saga — integração entre ChatGPT e o estoque de seminovos em tempo real, com widget visual interativo e criação automática de leads.
 
-**Responsável:** João Cunha
+**Responsável:** João Cunha — joao.clara@gruposaga.com.br
 
 ---
 
-## Navegação
+## Documentação principal
 
 | Documento | Conteúdo |
 |---|---|
-| [Visão Geral](01_visao_geral.md) | Objetivos, escopo e público-alvo |
-| [Arquitetura](02_arquitetura.md) | Componentes, serviços e diagrama |
-| [Fluxo de Dados](03_fluxo.md) | Ciclo de vida de uma requisição e criação de leads |
+| [Visão Geral](01_visao_geral.md) | O que é, o que resolve, fluxos do cliente e do consultor |
+| [Arquitetura](02_arquitetura.md) | Componentes, serviços, widget, rotas e deploy |
+| [Fluxo de Dados](03_fluxo.md) | Sequência de cada operação com diagramas |
+| [Como Testar Localmente](como_testar_localmente.md) | Rodar o servidor e visualizar o widget no navegador |
 
 ---
 
-## Tools disponíveis (v atual)
+## ML & IA (MCP Server)
 
-| Tool | Parâmetros obrigatórios | Parâmetros de lead (opcionais) | Descrição |
-|---|---|---|---|
-| `listar_lojas` | — | — | Lista todas as lojas Primeira Mão com cidade e UF |
-| `estoque_total` | `pagina` (padrão 1) | `nome_cliente`, `telefone_cliente` + dados do veículo | Estoque paginado — 3 lojas por vez. Quando cliente e veículo informados, cria lead de compra automaticamente |
-| `buscar_veiculo` | `consulta` (texto livre) | `nome_cliente`, `telefone_cliente` + dados do veículo | Busca curinga em 4 fases. Quando cliente e veículo informados, cria lead de compra automaticamente |
-| `avaliar_veiculo` | `placa`, `km` | `nome_cliente`, `telefone_cliente` | Proposta de compra/troca via FIPE + Pricing. Quando cliente informado, cria lead de venda automaticamente |
-
-> **Lead automático**: o LLM **não** chama nenhuma ferramenta separada para criar leads.
-> Basta re-chamar a mesma tool com `nome_cliente` + `telefone_cliente`.
-> A criação de lead no CRM Mobiauto e o disparo do webhook interno acontecem dentro da própria tool.
+| Documento | Conteúdo |
+|---|---|
+| [Índice ML&IA](ml&ia/index.md) | Stack, stakeholders, acesso ao ambiente |
+| [Widget](ml&ia/widget.md) | Arquitetura do iframe, modos compra/venda, bridge, CSS |
+| [Fontes de Dados](ml&ia/data/data_source.md) | Lambda, Mobiauto, FIPE, Pricing, PostgreSQL |
+| [Integrações](ml&ia/integrations/integration.md) | Diagrama de integrações, bridge widget→tool, detalhes de cada API |
+| [Integrações API](ml&ia/integrations/api.md) | Contratos de cada API externa |
+| [Workflows n8n](ml&ia/workflows/workflow.md) | Webhooks de notificação (compra e venda) |
+| [Exemplo de Fluxo](ml&ia/workflows/example_flow.md) | Walkthrough completo de uma conversa de compra e venda |
+| [Regras de Negócio](ml&ia/bussines_rules/rules.md) | Regras de busca, lead, paginação e rendering |
+| [Monitoramento](ml&ia/monitoring.md) | Logs, métricas e alertas |
+| [Boas Práticas](ml&ia/workflows/best_practices.md) | Guidelines de desenvolvimento |
 
 ---
 
-## Funções internas (não expostas como tools)
+## Infraestrutura
 
-| Função | Tipo de lead | Acionada por |
+| Documento | Conteúdo |
+|---|---|
+| [AWS Overview](infra/aws/aws.md) | Catálogo de recursos AWS |
+| [Lambda de Estoque](infra/aws/lambda/lambda.md) | Lambda principal + query Athena |
+| [API Gateway](infra/aws/api/api.md) | Endpoints expostos |
+
+---
+
+## Tools disponíveis (v3.2.26)
+
+| Tool | Descrição | Widget? |
 |---|---|---|
-| `_criar_lead_compra` | BUY — cliente quer comprar | `estoque_total`, `buscar_veiculo` |
-| `_criar_lead_venda` | SELL — cliente quer vender | `avaliar_veiculo` |
-| `_disparar_webhook` | POST para n8n | `_criar_lead_compra`, `_criar_lead_venda` |
+| `buscar_veiculos` | Busca com filtros e exibe carrossel visual | Sim (compra) |
+| `registrar_interesse_compra` | Lead de compra via widget | Via widget |
+| `avaliar_veiculo` | Proposta FIPE + precificação interna | Não |
+| `exibir_formulario_venda` | Formulário de avaliação interativo | Sim (venda) |
+| `registrar_interesse_venda` | Lead de venda via widget | Via widget |
+| `buscar_veiculo` | Busca textual em 4 fases (ID, placa, modelo) | Não |
+| `estoque_total` | Listagem de estoque em texto | Não |
+| `listar_lojas` | Lista lojas Primeira Mão | Não |
+| `diagnostico_registro` | Teste de CRM (uso interno) | Não |
 
 ---
 
 ## Stack
 
-- **Python 3.13** + **FastMCP**
-- **httpx** (async) para chamadas às APIs externas
-- **asyncio.gather** para busca paralela em todas as lojas
-- Transporte: **stdio** (MCP Inspector / local) e **SSE** (produção / Docker)
+- **Python 3.13** + **FastMCP 3.2.2**
+- **httpx** (async) para APIs externas
+- **Transporte:** stdio (MCP Inspector / local) | SSE (produção / Docker Swarm)
+- **Widget:** Vanilla JS + CSS dark (no frameworks externos — CSP restritivo)
+- **Deploy:** Docker Swarm + Traefik em `mcp-primeiramao.sagadatadriven.com.br`

@@ -1,76 +1,121 @@
-# Visão Geral: MCP Primeira Mão Saga
+# Visão Geral — MCP Primeira Mão Saga
 
-Servidor **Model Context Protocol (MCP)** especializado no ecossistema de seminovos do programa **Primeira Mão** do **Grupo Saga**. Atua como ponte entre modelos de LLM (Claude, ChatGPT) e o estoque real das lojas, permitindo busca em linguagem natural, avaliação de veículos e registro de leads — tudo dentro do chat, sem sair da conversa.
-
----
-
-## Objetivos
-
-1. **Busca visual de veículos**: o cliente conversa com a IA e recebe um carrossel interativo com fotos, preços e botão de interesse — sem precisar navegar no site.
-2. **Captura de lead no widget**: o cliente clica em "Tenho interesse" diretamente no card, informa nome e telefone, e o lead é registrado automaticamente no CRM Mobiauto + webhook n8n.
-3. **Avaliação de troca em tempo real**: proposta automática de compra/troca via dados FIPE + API de precificação Saga, consultados pela placa sem perguntas adicionais ao cliente.
-4. **Formulário de venda no widget**: após a avaliação, um formulário visual coleta nome e telefone do cliente que quer vender — sem que o consultor precise agir no chat.
-5. **Notificação interna via webhook**: a cada lead criado, um POST é disparado para o n8n com dados completos do cliente e do veículo.
+Servidor **Model Context Protocol (MCP)** especializado no ecossistema de seminovos do programa **Primeira Mão** do **Grupo Saga**. Atua como ponte entre o ChatGPT e os sistemas internos do Grupo Saga: estoque real, CRM de leads, FIPE e precificação — tudo dentro da conversa, sem sair do chat.
 
 ---
 
-## Tools disponíveis
+## O que resolve
 
-| Tool | Tipo | Descrição |
-|---|---|---|
-| `buscar_veiculos` | Compra | Retorna carrossel visual de veículos (widget ChatGPT Apps) |
-| `registrar_interesse_compra` | Compra | Registra lead de compra no CRM + webhook |
-| `avaliar_veiculo` | Venda | Calcula proposta de compra/troca via FIPE + Pricing |
-| `exibir_formulario_venda` | Venda | Abre formulário visual de coleta de dados do vendedor |
-| `registrar_interesse_venda` | Venda | Registra lead de venda no CRM + webhook (chamado pelo widget) |
-| `buscar_veiculo` | Busca textual | Busca por ID/placa exata ou linguagem natural (retorno Markdown) |
-| `estoque_total` | Busca textual | Lista geral de estoque por cidade (retorno Markdown) |
-| `listar_lojas` | Informação | Lista todas as lojas Primeira Mão Saga com cidade/UF |
-| `diagnostico_registro` | Debug | Testa integração com CRM Mobiauto |
-
----
-
-## Widget ChatGPT Apps
-
-A tool `buscar_veiculos` abre um **widget interativo** dentro do chat quando chamada via ChatGPT. O widget é composto de:
-
-- **Carrossel horizontal** com scroll snap — mostra ~2 cards por vez, navegação com setas ←→
-- **Card de veículo**: foto, marca, título, ano, km, preço formatado, loja, link para o site
-- **Botão "Tenho interesse"**: expande um mini-formulário (nome + telefone) e chama `registrar_interesse_compra` via bridge MCP
-
-A tool `exibir_formulario_venda` abre um **widget separado** (`ui://vehicle-sell`) com:
-- Dados do veículo avaliado (marca, placa, km, proposta Saga)
-- Formulário de nome + telefone
-- Ao confirmar, chama `registrar_interesse_venda` via bridge MCP
-
-Os dois widgets usam o mesmo JS/CSS mas recursos MCP distintos, evitando conflito de estado entre fluxos de compra e venda.
-
----
-
-## Fonte de estoque
-
-| Fonte | Prioridade | Quando usar |
-|---|---|---|
-| **Lambda AWS** (Athena) | Primária | `buscar_veiculos` — veículos ativos (`status = 1`) com imagem, preço, loja e link |
-| **Mobiauto API** | Fallback (desabilitado) | Ativado apenas se `_LAMBDA_APENAS = False` |
-
-A Lambda consulta as tabelas `modelled.pm_*` via AWS Athena. O filtro `d.status = 1` garante que apenas veículos disponíveis aparecem.
-
----
-
-## Público-Alvo
-
-| Perfil | Como usa |
+| Problema | Solução |
 |---|---|
-| **Cliente final** | Busca veículos ou solicita avaliação via ChatGPT App; confirma interesse pelo widget sem sair do chat |
-| **Consultor de vendas** | Recebe notificação automática do n8n com dados do cliente e do veículo quando um lead é gerado |
-| **Equipe técnica** | Mantém a integração Lambda → Athena → Widget → CRM e evolui as tools |
+| Cliente pergunta sobre seminovos e recebe só texto | Widget visual com fotos, preços e botão de interesse |
+| Consultor não sabe que o cliente demonstrou interesse | Lead criado no CRM + notificação automática via n8n |
+| Cliente quer saber quanto receberia pelo seu carro | Avaliação com FIPE real + modelo interno de precificação |
+| Cliente quer vender mas não sabe com quem falar | Formulário no chat; consultor é notificado automaticamente |
 
 ---
 
-## O que está fora do escopo
+## Como funciona — visão do cliente
 
-- Financiamento ou assinatura de contrato
-- Histórico de negociações anteriores
-- Gestão ou edição de estoque (somente leitura)
-- Agendamento de visita à loja
+### Fluxo de compra
+
+1. O cliente conversa com o ChatGPT e pede veículos disponíveis  
+   *"Quero ver HRVs disponíveis em Goiânia"*
+
+2. O sistema busca no estoque real e exibe um **carrossel visual** com fotos, preço, ano, KM e loja.
+
+3. O cliente clica em **"Tenho interesse"** — o formulário aparece em todos os cards simultaneamente.
+
+4. Preenche nome e telefone no card do veículo desejado e clica em enviar.
+
+5. Um consultor da loja correspondente recebe a notificação e entra em contato.
+
+### Fluxo de venda / avaliação
+
+1. O cliente diz que quer vender seu carro  
+   *"Quanto a Saga pagaria no meu Civic 2019 placa ABC1D23, 55.000 km?"*
+
+2. O sistema consulta a tabela FIPE pela placa e calcula uma proposta com o modelo interno de precificação.
+
+3. O **formulário de avaliação** aparece com o veículo e o valor da proposta já preenchidos. O cliente informa nome e telefone e confirma.
+
+4. Um consultor de avaliação recebe notificação com todos os detalhes do veículo e da proposta.
+
+---
+
+## Como funciona — visão do consultor
+
+O consultor recebe via **n8n** uma notificação contendo:
+
+**Para compra:**
+- Nome e telefone do cliente
+- Veículo de interesse (modelo, ano, KM, cor, placa)
+- Preço e loja
+- ID do lead já criado no CRM Mobiauto
+
+**Para venda:**
+- Nome e telefone do cliente
+- Placa, KM e descrição do veículo
+- Valor da proposta calculada
+- ID do lead criado no CRM
+
+O lead já está registrado no Mobiauto quando o consultor recebe a notificação — sem cadastro manual.
+
+---
+
+## Ferramentas disponíveis (tools)
+
+| Tool | O que faz | Usa widget? |
+|---|---|---|
+| `buscar_veiculos` | Busca estoque com filtros e exibe carrossel visual | Sim (compra) |
+| `registrar_interesse_compra` | Registra lead de compra a partir dos dados do widget | Via widget |
+| `avaliar_veiculo` | Consulta FIPE e calcula proposta de compra do carro do cliente | Não |
+| `exibir_formulario_venda` | Exibe formulário de contato após avaliação | Sim (venda) |
+| `registrar_interesse_venda` | Registra lead de venda a partir do formulário | Via widget |
+| `buscar_veiculo` | Busca textual por modelo, placa ou ID | Não |
+| `estoque_total` | Lista estoque geral de uma cidade em texto | Não |
+| `listar_lojas` | Lista todas as lojas Primeira Mão | Não |
+| `diagnostico_registro` | Testa conectividade com o CRM (uso interno) | Não |
+
+---
+
+## Fonte de dados de estoque
+
+**Primária:** AWS Lambda que consulta o AWS Athena sobre as tabelas `modelled.pm_*`. Retorna veículos `status = 1` (disponíveis) com imagem associada.
+
+**Fallback:** API Mobiauto de estoque — acionada automaticamente se a Lambda estiver indisponível.
+
+---
+
+## Infraestrutura resumida
+
+```
+Cliente no ChatGPT
+       ↓
+   MCP Server (FastMCP 3.2.2, Python 3.13, SSE porta 8000)
+       ├── Estoque → Lambda AWS → Athena (modelled.pm_*)
+       ├── Widget → iframe ChatGPT (carrossel ou formulário)
+       ├── CRM → Mobiauto (leads de compra e venda)
+       ├── FIPE → API interna Saga
+       ├── Precificação → API interna Saga
+       └── Notificação → Webhooks n8n → consultor
+```
+
+Exposto em produção via Traefik em `mcp-primeiramao.sagadatadriven.com.br` com TLS automático (Let's Encrypt).
+
+---
+
+## Escopo — o que o sistema NÃO faz
+
+- Não negocia preço
+- Não agenda visitas
+- Não acessa dados de financiamento
+- Não mantém histórico entre sessões diferentes
+- Não envia mensagens WhatsApp diretamente (isso é responsabilidade do n8n)
+- Não gerencia o CRM além da criação do lead inicial
+
+---
+
+## Responsável técnico
+
+João Cunha — joao.clara@gruposaga.com.br

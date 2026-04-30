@@ -4,74 +4,180 @@
 
 ```mermaid
 graph TD
-    subgraph "LLMs / Clientes"
-        CLAUDE["Claude / ChatGPT App"]
-        INSP["MCP Inspector"]
+    subgraph Clientes
+        A[ChatGPT App]
+        B[MCP Inspector]
+        C[Claude Desktop]
     end
 
-    subgraph "MCP Server (Python)"
-        MCP["main.py\n4 tools + funções internas de lead"]
-        PROP["MobiautoProposalService\n(CRM)"]
-        AGG["InventoryAggregator\n(estoque + cache)"]
-        FIPE_S["FipeService\n(retry 3x)"]
-        PRICE_S["PricingService"]
-        MOBI_S["MobiautoService\n(token + estoque)"]
-        DB["postgres_client\n(lojas)"]
+    subgraph MCP_Server["MCP Server (main.py, porta 8000)"]
+        D[Tools MCP]
+        E[Resources MCP]
+        F[Rotas HTTP /api /local /ui]
+        G[LambdaInventoryService]
+        H[InventoryAggregator]
+        I[FipeService]
+        J[PricingService]
+        K[MobiautoService]
+        L[MobiautoProposalService]
+        M[PostgreSQL Client]
     end
 
-    subgraph "APIs Externas"
-        MOBI_INV["Mobiauto\nEstoque"]
-        MOBI_CRM["Mobiauto\nCRM Propostas"]
-        TOKEN["AWS Token\n(auth Mobiauto)"]
-        FIPE_API["API FIPE\n(Saga)"]
-        PRICE_API["API Pricing\n(Saga)"]
+    subgraph Widget["Widget ChatGPT (iframe)"]
+        N[vehicle-offers.js]
+        O[ui://vehicle-offers carrossel]
+        P[ui://vehicle-sell formulário]
     end
 
-    subgraph "Automação Interna"
-        N8N_C["n8n Webhook\ncliente_quer_comprar"]
-        N8N_V["n8n Webhook\ncliente_quer_vender"]
+    subgraph AWS
+        Q[Lambda Estoque]
+        R[Athena modelled.pm_*]
+        S[API Gateway Token]
     end
 
-    subgraph "Dados Locais"
-        PG[("PostgreSQL\nlojas Saga")]
-        CSV["lojas_mock.csv\n(fallback)"]
+    subgraph APIs_Externas
+        T[Mobiauto Estoque]
+        U[Mobiauto CRM]
+        V[FIPE API Saga]
+        W[Pricing API Saga]
     end
 
-    CLAUDE <-->|SSE / stdio| MCP
-    INSP <-->|stdio| MCP
+    subgraph Automacao
+        X[n8n cliente_quer_comprar]
+        Y[n8n cliente_quer_vender]
+    end
 
-    MCP --> PROP
-    MCP --> AGG
-    MCP --> FIPE_S
-    MCP --> PRICE_S
+    subgraph Dados_Locais
+        Z[PostgreSQL lojas]
+        AA[lojas_mock.csv]
+    end
 
-    PROP --> MOBI_CRM
-    PROP --> N8N_C
-    PROP --> N8N_V
+    A -- SSE --> D
+    B -- stdio --> D
+    C -- stdio --> D
 
-    AGG --> MOBI_S
-    AGG --> DB
+    D --> G --> Q --> R
+    D --> H --> T
+    D --> I --> V
+    D --> J --> W
+    D --> K --> T
+    D --> L --> U
+    D --> M --> Z
+    M -.fallback.-> AA
+    K --> S
 
-    MOBI_S --> TOKEN
-    MOBI_S --> MOBI_INV
+    D -- structured_content --> E
+    E --> O
+    E --> P
+    O -- callTool --> D
+    P -- callTool --> D
 
-    FIPE_S --> FIPE_API
-    PRICE_S --> PRICE_API
-
-    DB --> PG
-    DB --> CSV
+    L --> X
+    L --> Y
 ```
 
-## Resumo das Integrações
+---
 
-| Sistema | Tipo | Direção | Propósito |
-|---|---|---|---|
-| Mobiauto Inventory API | REST GET | Entrada | Buscar estoque de veículos por dealer |
-| Mobiauto CRM Proposal API | REST POST | Saída | Criar leads de compra (BUY) e venda (SELL) |
-| AWS Token (Mobiauto Auth) | REST GET | Entrada | Obter Bearer token para autenticação Mobiauto |
-| API FIPE Saga | REST GET | Entrada | Dados técnicos e valor FIPE pela placa |
-| API Pricing Saga | REST GET | Entrada | Proposta de compra/troca baseada em FIPE + km |
-| n8n Webhook Compra | HTTP POST | Saída | Notificar consultores quando lead de compra é criado |
-| n8n Webhook Venda | HTTP POST | Saída | Notificar consultores quando lead de venda é criado |
-| PostgreSQL Saga | SQL | Entrada | Lista de lojas com dealer_id para o programa Primeira Mão |
-| lojas_mock.csv | Arquivo local | Entrada (fallback) | Cópia local das 49 lojas — ativada quando banco indisponível |
+## Tabela de integrações
+
+| Serviço | Tipo | Direção | Arquivo | Autenticação |
+|---|---|---|---|---|
+| Lambda AWS (estoque) | REST | OUT | `lambda_inventory_service.py` | `x-api-key` header |
+| Mobiauto Estoque | REST | OUT | `mobiauto_service.py` | Bearer token |
+| Mobiauto CRM (leads) | REST | OUT | `mobiauto_proposal_service.py` | Bearer token |
+| Token AWS | REST | OUT | `mobiauto_service.py` | `MOBI_SECRET` |
+| FIPE API Saga | REST | OUT | `fipe_service.py` | Nenhuma (interna) |
+| Pricing API Saga | REST | OUT | `pricing_service.py` | Nenhuma (interna) |
+| n8n cliente_quer_comprar | Webhook POST | OUT | `main.py` | Nenhuma (rede interna) |
+| n8n cliente_quer_vender | Webhook POST | OUT | `main.py` | Nenhuma (rede interna) |
+| PostgreSQL | TCP | OUT | `postgres_client.py` | DB_USER/PASSWORD |
+| ChatGPT Apps | SSE (MCP) | IN | `main.py` | Verificação domínio OpenAI |
+| MCP Inspector / Claude | stdio (MCP) | IN | `main.py` | Nenhuma (local) |
+
+---
+
+## Bridge Widget → Tool
+
+O widget (iframe) pode chamar tools MCP diretamente usando a API do ChatGPT Apps:
+
+```javascript
+// Dentro do vehicle-offers.js (widget de compra)
+window.openai.callTool("registrar_interesse_compra", {
+  nome_cliente:     "João Silva",
+  telefone_cliente: "62999990001",
+  titulo_veiculo:   "Honda Civic Touring 2021",
+  veiculo_id:       "53480",
+  preco_formatado:  "R$ 89.900",
+  loja_unidade:     "SN GO BURITI",
+  plate:            "ABC1D23",
+  modelYear:        "2021",
+  km:               "32000"
+})
+
+// Widget de venda
+window.openai.callTool("registrar_interesse_venda", {
+  nome_cliente:      "Maria Souza",
+  telefone_cliente:  "62988880002",
+  placa:             "TST1T23",
+  km:                "50000",
+  veiculo_descricao: "Toyota Corolla 2019",
+  valor_proposta:    "R$ 28.500,00"
+})
+```
+
+Esse padrão permite que o lead seja registrado sem que o LLM precise intervir após a interação do usuário com o widget.
+
+---
+
+## Detalhes de cada integração
+
+### Lambda AWS (estoque)
+
+- **URL**: `LAMBDA_ESTOQUE_URL` (API Gateway)
+- **Método**: GET com query params
+- **Timeouts**: `API_TIMEOUT` (padrão 30s)
+- **Autenticação**: `x-api-key: LAMBDA_API_KEY`
+- **Resposta**: array JSON de veículos ou payload proxy `{"body": "..."}`
+- **Normalização**: `LambdaInventoryService._normalizar()` converte para schema interno
+
+### Mobiauto Estoque
+
+- **URL**: `https://open-api.mobiauto.com.br/api/dealer/{id}/inventory/v1.0`
+- **Método**: GET
+- **Token**: obtido via `URL_AWS_TOKEN?mobi_secret={MOBI_SECRET}`, cacheado em memória
+- **Renovação**: automática em HTTP 401
+- **Timeout**: `API_TIMEOUT` (padrão 30s)
+
+### Mobiauto CRM (criação de leads)
+
+- **URL**: `https://open-api.mobiauto.com.br/api/proposal/v1.0/{dealer_id}`
+- **Método**: POST JSON
+- **Tipos**: `intention_type = "BUY"` ou `"SELL"`
+- **Fallback de SELL**: tenta BUY provider → sem provider
+- **Grupo**: `groupId: 948` (fixo)
+- **Timeout**: 15s
+
+### FIPE API Saga
+
+- **Método**: GET `/fipe?placa={placa}`
+- **Timeout**: 60s
+- **Retry**: até 3 tentativas com delay de 2s em timeout
+- **Resposta**: dict ou array (normalizado pelo serviço)
+
+### Pricing API Saga
+
+- **Método**: POST `/carro/compra`
+- **Timeout**: `API_TIMEOUT` (padrão 30s)
+- **Erros 400**: retorna detalhes de validação
+- **Erros 5xx**: retorna mensagem genérica
+
+### Webhooks n8n
+
+| Webhook | Endpoint | Ativado por |
+|---|---|---|
+| `cliente_quer_comprar` | `https://automatemaiawh.sagadatadriven.com.br/webhook/cliente_quer_comprar` | `registrar_interesse_compra` |
+| `cliente_quer_vender` | `https://automatemaiawh.sagadatadriven.com.br/webhook/cliente_quer_vender` | `registrar_interesse_venda` |
+
+- **Método**: POST JSON
+- **Timeout**: 10s
+- **Retry**: não; falha é logada mas não impede retorno ao cliente

@@ -1,352 +1,264 @@
-# Fluxo de Dados: MCP Primeira Mão Saga
+# Fluxo de Dados — MCP Primeira Mão Saga
 
 ---
 
 ## Fluxo 1 — Busca visual de veículos (`buscar_veiculos`)
 
-O usuário pede para ver veículos disponíveis. O LLM chama `buscar_veiculos(cidade, ...)`.
+**Gatilho**: Cliente pede veículos em linguagem natural.  
+*"Quero ver SUVs disponíveis em Goiânia até R$ 80.000"*
 
 ```
-Entrada: cidade (obrigatório) + filtros opcionais:
-         marca, modelo, versao, preco_min, preco_max, km_max, ano_min, ano_max, limit
+LLM chama buscar_veiculos(cidade="Goiânia", preco_max=80000)
+  │
+  ├─ LambdaInventoryService.buscar(cidade, filtros)
+  │    ├─ GET Lambda AWS (x-api-key)
+  │    ├─ Lambda executa query Athena (modelled.pm_*)
+  │    └─ Retorna lista de veículos com imagem e status=1
+  │
+  ├─ [se Lambda vazia] InventoryAggregator.buscar_estoque_por_lojas()
+  │    └─ GET Mobiauto /api/dealer/{id}/inventory/v1.0 (fallback)
+  │
+  ├─ Filtra veículos com imagem
+  ├─ Aplica scoring por palavras-chave se consulta textual fornecida
+  ├─ Limita a 20 veículos
+  │
+  └─ Retorna structured_content:
+       {
+         "type": "vehicle_cards",
+         "vehicles": [...],
+         "searchContext": { "city": "GOIÂNIA", "store": "..." }
+       }
 
-1. LambdaInventoryService.buscar(params)
-   └─ GET {LAMBDA_ESTOQUE_URL}?cidade=...&marca=...
-      x-api-key: {LAMBDA_API_KEY}
-   └─ Lambda executa SELECT Athena em modelled.pm_deal WHERE d.status = 1 AND cidade = ?
-   └─ Retorna lista de veículos com id, marca, modelo, versao, preço, km, ano, loja, url, url_imagem
-
-2. Monta structured content (sc):
-   └─ { vehicles: [...], city: "Goiânia", count: N }
-
-3. Armazena _LAST_BUY_PAYLOAD = sc
-
-4. Retorna tool result com openai/outputTemplate: "ui://vehicle-offers"
-   └─ ChatGPT lê o resource ui://vehicle-offers (HTML inline)
-   └─ HTML contém: CSS inline + JSON payload (#vehicle-data) + JS inline
-
-5. Widget carrega no iframe do ChatGPT Apps:
-   └─ JS extrai payload de #vehicle-data (sem polling)
-   └─ Se toolOutput disponível → usa structured content do toolOutput
-   └─ Polling 200 ms × 25 vezes → fallback se toolOutput demorar
-   └─ Renderiza carrossel: título, marca, km, preço, imagem, link, botão "Tenho interesse"
+ChatGPT renderiza recurso ui://vehicle-offers
+  └─ iframe com carrossel de cards
 ```
+
+**Dados armazenados**: `_LAST_BUY_PAYLOAD` no servidor (fallback para HTML cached)
 
 ---
 
-## Fluxo 2 — Interesse de compra (`registrar_interesse_compra`)
+## Fluxo 2 — Registro de interesse de compra (`registrar_interesse_compra`)
 
-O usuário clica em "Tenho interesse" num card do widget. O widget chama `callTool` internamente.
+**Gatilho**: Cliente clica em "Tenho interesse" no carrossel, preenche nome e telefone e clica em enviar.
 
 ```
-Entrada: nome_cliente, telefone_cliente, titulo_veiculo, loja_unidade,
-         preco_formatado, veiculo_id
-
-1. Widget JS → window.openai.callTool('registrar_interesse_compra', {...})
-   └─ Bridge MCP nativa do ChatGPT Apps
-
-2. _criar_lead_compra(nome, telefone, titulo, loja, preco, veiculo_id)
-
-3. Resolve dealer_id:
-   └─ busca exata no cadastro de lojas por loja_unidade
-   └─ busca parcial (contains)
-   └─ fallback: primeira loja da lista
-
-4. POST https://open-api.mobiauto.com.br/api/proposal/v1.0/{dealer_id}
-   └─ intentionType: "BUY"
-   └─ provider: id=11, name="Site"
-   └─ groupId: "948"
-   └─ Bearer token Mobiauto (renovado automaticamente no 401)
-
-5. POST webhook compra (n8n) — fire-and-forget
-   └─ URL: automatemaiawh.sagadatadriven.com.br/webhook/cliente_quer_comprar
-   └─ Payload: lead_id, nome_cliente, telefone_cliente, titulo_card, veiculo_id,
-               preco_formatado, loja_unidade, plate, modelYear, km, colorName, dealer_id
-
-6. Retorna ao widget:
-   └─ registrado: true/false
-   └─ mensagem de confirmação
-   └─ fallback_url: https://www.primeiramaosaga.com.br/gradedeofertas
+Widget chama window.openai.callTool("registrar_interesse_compra", {
+  nome_cliente, telefone_cliente, titulo_veiculo,
+  veiculo_id, preco_formatado, loja_unidade, plate, ...
+})
+  │
+  ├─ _criar_lead_compra()
+  │    ├─ MobiautoProposalService.criar_lead(intention_type="BUY")
+  │    │    ├─ GET token AWS
+  │    │    ├─ Resolve dealer_id (loja_nome → UF → primeiro)
+  │    │    ├─ POST /api/proposal/v1.0/{dealer_id}
+  │    │    └─ [falha 4xx] retry sem provider
+  │    │
+  │    └─ _disparar_webhook(_WH_COMPRA)
+  │         └─ POST n8n cliente_quer_comprar
+  │              └─ n8n notifica consultor da loja
+  │
+  └─ Retorna { registrado: true, dealer_id, mensagem }
 ```
 
 ---
 
 ## Fluxo 3 — Busca textual (`buscar_veiculo`)
 
-O usuário digita qualquer coisa: "quero um corolla branco 2019", "ABC1D23", "53480".
+**Gatilho**: LLM chama com consulta específica (placa, ID ou modelo).
 
 ```
-Fase 0 — Detecção de formato
-   └─ Parece placa (ABC1234 / ABC1D23) ou ID numérico?
-       → Sim: executa Fase 1
-       → Não: pula direto para Fase 2
-
-Fase 1 — ID / placa exata (só para placas/IDs)
-   └─ asyncio.gather → busca em TODAS as lojas em paralelo (InventoryAggregator)
-   └─ Encontrou → retorna 1 veículo com placa visível
-
-Fase 2 — AND semântico (todas as palavras-chave batem)
-   └─ Extrai palavras-chave: ignora stopwords ("quero", "um", "cor", etc.)
-      "quero um corolla branco 2019" → ["corolla", "branco", "2019"]
-   └─ buscar_estoque_consolidado(limit=None) → todos os veículos de todas as lojas
-   └─ Filtra veículos onde TODOS os termos batem em algum campo
-   └─ Encontrou → retorna resultados em Markdown
-
-Fase 3 — OR com ranking (termos parciais)
-   └─ Pontua cada veículo: quantos termos batem
-   └─ Ordena por score decrescente
-   └─ Encontrou → retorna com mensagem "veja as opções mais próximas"
-
-Fase 4 — Sugestões gerais (nenhum termo bateu)
-   └─ Se estoque vazio → mensagem de indisponibilidade temporária
-   └─ Se estoque > 0   → retorna até 20 veículos com mensagem explicativa
-
-Nota: buscar_veiculo usa InventoryAggregator (fallback Mobiauto), não a Lambda.
-      Retorna texto Markdown, sem widget.
+buscar_veiculo(consulta="ABC1D23", cidade="Goiânia")
+  │
+  ├─ Fase 1: _parece_id_ou_placa() → buscar_veiculo_especifico()
+  │
+  ├─ Fase 2: AND — todas as palavras-chave devem estar presentes
+  │
+  ├─ Fase 3: OR com scoring — pontuação por quantidade de matches
+  │
+  └─ Fase 4: Fallback — sugestões de modelos similares
 ```
+
+Saída: Markdown com cards renderizados por `_renderizar_cards()`.
 
 ---
 
 ## Fluxo 4 — Listagem de estoque (`estoque_total`)
 
 ```
-Entrada: cidade (obrigatório), pagina (default: 1)
-
-1. Carrega lista de lojas
-   └─ Cache hit → usa _lojas_cache
-   └─ Cache miss → postgres_client → PostgreSQL ou CSV fallback
-
-2. Obtém token Mobiauto
-   └─ Cache hit → usa _token_cache
-   └─ Cache miss → GET {URL_AWS_TOKEN}{MOBI_SECRET}
-
-3. Seleciona 3 lojas da página solicitada (lojas[(pag-1)*3 : pag*3])
-
-4. asyncio.gather → 3 chamadas paralelas à API Mobiauto
-   └─ GET /api/dealer/{id}/inventory/v1.0
-   └─ Filtra apenas veículos com imagem
-
-5. Se a página retornar vazia → avança automaticamente para a próxima
-
-6. Retorna listagem Markdown (sem widget)
+estoque_total(cidade="Goiânia")
+  │
+  ├─ Filtra lojas pela cidade
+  ├─ GET Mobiauto por loja
+  ├─ Filtra veículos com imagem
+  └─ Renderiza até 25 cards em Markdown
 ```
 
 ---
 
 ## Fluxo 5 — Avaliação de veículo (`avaliar_veiculo`)
 
-O cliente quer saber quanto vale seu carro para venda ou troca.
+**Gatilho**: Cliente informa placa e KM do seu carro.  
+*"Quanto pagam no meu Corolla placa TST1T23, 60.000 km?"*
 
 ```
-Entrada: placa + km (obrigatórios)
-         uf, cor, existe_zero_km (opcionais)
-
-1. Normaliza placa → remove traços, maiúsculas (ex: "abc-1234" → "ABC1234")
-
-2. Consulta FIPE pela placa (com retry automático)
-   └─ GET {PRECIFICACAO_API_URL}/fipe?placa=ABC1234
-   └─ Timeout: 60s por tentativa | Máximo: 3 tentativas | Espera 2s entre tentativas
-   └─ Retorna: marca, modelo, versao, carroceria, combustivel, valor_fipe, codigo_fipe, ano_modelo
-   └─ Erro FIPE → retorna dict de erro imediatamente
-
-3. Monta payload de precificação com dados da FIPE + km/uf/cor do cliente
-
-4. Consulta API de precificação Saga
-   └─ GET {PRECIFICACAO_API_URL}/carro/compra?placa=...&valor_fipe=...&...
-   └─ Timeout: 20s
-   └─ Erro → retorna dict de erro
-
-5. Retorna proposta_markdown ao LLM:
-   └─ Valor > 0 → tabela com dados FIPE + proposta Saga
-   └─ Valor = 0 → orientação de avaliação presencial
-
-6. LLM exibe proposta e pergunta se o cliente quer prosseguir
-   └─ Para coletar dados do vendedor → LLM chama exibir_formulario_venda
+avaliar_veiculo(placa="TST1T23", km=60000, uf="GO")
+  │
+  ├─ normalizar_placa("TST1T23") → "TST1T23"
+  │
+  ├─ FipeService.consultar_por_placa("TST1T23")
+  │    ├─ GET /fipe?placa=TST1T23  [timeout 60s, retry 3×]
+  │    └─ Retorna: marca, modelo, versão, valor_fipe, combustível, ano
+  │
+  ├─ PricingService.calcular_compra({
+  │     placa, valor_fipe, marca, modelo, versao,
+  │     combustivel, ano_modelo, uf, km, cor, existe_zero_km
+  │   })
+  │    └─ POST PRECIFICACAO_API_URL/carro/compra
+  │         └─ Retorna: { "Valor_proposta_compra": 28500.00 }
+  │
+  └─ Formata resposta Markdown com veículo + proposta
+       → LLM DEVE chamar exibir_formulario_venda() imediatamente após
 ```
 
 ---
 
-## Fluxo 6 — Widget de venda (`exibir_formulario_venda`)
+## Fluxo 6 — Widget de formulário de venda (`exibir_formulario_venda`)
 
-Chamado pelo LLM após a avaliação, para coletar nome e telefone do cliente que quer vender.
-
-```
-Entrada: placa, marca, km, valor_proposta (obrigatórios)
-         modelo, ano, cor, uf (opcionais)
-
-1. Monta sell_sc:
-   └─ { mode: "sell", placa, marca, modelo, ano, km, cor, uf, valor_proposta }
-
-2. Armazena _LAST_SELL_PAYLOAD = sell_sc
-   (variável separada de _LAST_BUY_PAYLOAD — evita race condition entre sessões)
-
-3. Retorna tool result com openai/outputTemplate: "ui://vehicle-sell"
-   └─ ChatGPT lê o resource ui://vehicle-sell (HTML inline)
-   └─ Mesmo JS/CSS que o widget de compra; modo determinado por sell_sc.mode = "sell"
-
-4. Widget renderiza formulário de venda:
-   └─ Exibe: marca, placa, km, proposta Saga
-   └─ Campos: nome + telefone
-   └─ Ao confirmar: window.openai.callTool('registrar_interesse_venda', {...})
-```
-
----
-
-## Fluxo 7 — Interesse de venda (`registrar_interesse_venda`)
-
-O usuário preenche o formulário de venda e clica em confirmar. O widget chama `callTool`.
+**Gatilho**: Chamado pelo LLM imediatamente após `avaliar_veiculo`.
 
 ```
-Entrada: nome_cliente, telefone_cliente, placa, km, marca, modelo,
-         ano_modelo, cor, uf, valor_proposta, preco_formatado
+exibir_formulario_venda(
+  veiculo_descricao="Toyota Corolla 2019",
+  placa="TST1T23",
+  km=60000,
+  valor_proposta="R$ 28.500,00"
+)
+  │
+  ├─ Formata valor (garante prefixo "R$")
+  ├─ Armazena em _LAST_SELL_PAYLOAD
+  │
+  └─ Retorna structured_content:
+       { "mode": "sell", "evaluation": { vehicleDescription, plate, km, proposal } }
 
-1. Widget JS → window.openai.callTool('registrar_interesse_venda', {...})
-
-2. _criar_lead_venda(nome, telefone, placa, km, marca, modelo, ...)
-
-3. Resolve dealer_id por UF:
-   └─ primeiro dealer cadastrado na UF informada
-   └─ fallback: primeira loja da lista
-
-4. POST https://open-api.mobiauto.com.br/api/proposal/v1.0/{dealer_id}
-   └─ intentionType: "SELL"
-   └─ provider: id=245, name="Primeira Mão - Avaliação"
-   └─ groupId: "948"
-   └─ Bearer token Mobiauto (renovado automaticamente no 401)
-
-5. POST webhook venda (n8n) — fire-and-forget
-   └─ URL: automatemaiawh.sagadatadriven.com.br/webhook/cliente_quer_vender
-   └─ Payload: lead_id, nome_cliente, telefone_cliente, placa, km, veiculo_descricao,
-               valor_proposta, preco_formatado, marca, modelo, ano_modelo, cor, uf, dealer_id
-
-6. Retorna ao widget:
-   └─ registrado: true/false
-   └─ mensagem de confirmação
-   └─ fallback_url: https://www.primeiramaosaga.com.br/vender/avaliar-veiculo/cliente
+ChatGPT renderiza recurso ui://vehicle-sell
+  └─ iframe com formulário compacto (máx 420px, centralizado)
+       Campos: nome, telefone
+       Exibe: veículo, placa, km, proposta
 ```
 
 ---
 
-## Diagrama de sequência — Compra via widget
+## Fluxo 7 — Registro de interesse de venda (`registrar_interesse_venda`)
+
+**Gatilho**: Cliente preenche nome e telefone no formulário de venda e clica em confirmar.
+
+```
+Widget chama window.openai.callTool("registrar_interesse_venda", {
+  nome_cliente, telefone_cliente, placa, km,
+  veiculo_descricao, valor_proposta, email_cliente
+})
+  │
+  ├─ _criar_lead_venda()
+  │    ├─ MobiautoProposalService.criar_lead(intention_type="SELL")
+  │    │    ├─ GET token AWS
+  │    │    ├─ Resolve dealer_id por UF
+  │    │    ├─ POST /api/proposal/v1.0/{dealer_id}
+  │    │    └─ [falha SELL] retry com provider BUY → retry sem provider
+  │    │
+  │    └─ _disparar_webhook(_WH_VENDA)
+  │         └─ POST n8n cliente_quer_vender
+  │              └─ n8n notifica consultor de avaliação
+  │
+  └─ Retorna { registrado: true, dealer_id, mensagem }
+```
+
+---
+
+## Diagrama de sequência — Compra
 
 ```mermaid
 sequenceDiagram
-    participant U as Usuário
-    participant L as LLM
-    participant M as main.py
-    participant LS as LambdaInventoryService
-    participant LAMBDA as Lambda AWS (Athena)
-    participant W as Widget (iframe)
-    participant CRM as Mobiauto CRM
-    participant WH as n8n Webhook
+    participant C as Cliente (ChatGPT)
+    participant MCP as MCP Server
+    participant L as Lambda AWS
+    participant M as Mobiauto CRM
+    participant N as n8n
 
-    U->>L: "mostra carros em Goiânia"
-    L->>M: buscar_veiculos(cidade="Goiânia")
-    M->>LS: buscar({cidade: "Goiânia"})
-    LS->>LAMBDA: GET ?cidade=goiania (x-api-key)
-    LAMBDA-->>LS: veículos ativos (status=1)
-    LS-->>M: lista normalizada
-    M->>M: _LAST_BUY_PAYLOAD = sc
-    M-->>L: toolOutput + outputTemplate: ui://vehicle-offers
-    L->>W: carrega resource ui://vehicle-offers
-    W-->>U: carrossel de cards
-
-    U->>W: clica "Tenho interesse" → preenche nome e telefone
-    W->>M: callTool registrar_interesse_compra(nome, tel, ...)
-    M->>CRM: POST /api/proposal/v1.0/{dealer_id} [BUY]
-    CRM-->>M: lead_id
-    M->>WH: POST /webhook/cliente_quer_comprar
-    WH-->>M: 200 OK
-    M-->>W: { registrado: true, mensagem: "..." }
-    W-->>U: "Interesse registrado!"
+    C->>MCP: "Quero ver HRVs em Goiânia"
+    MCP->>L: GET /mcp_veiculos?cidade=Goiânia&modelo=hrv
+    L-->>MCP: 25 veículos JSON
+    MCP-->>C: structured_content (widget carrossel)
+    C->>C: Visualiza cards, clica "Tenho interesse"
+    C->>C: Preenche nome e telefone
+    C->>MCP: callTool("registrar_interesse_compra", {...})
+    MCP->>M: POST /api/proposal/v1.0/{dealer_id}
+    M-->>MCP: lead_id criado
+    MCP->>N: POST /webhook/cliente_quer_comprar
+    N-->>MCP: 200 OK
+    MCP-->>C: "Interesse registrado! Consultor entrará em contato."
 ```
 
 ---
 
-## Diagrama de sequência — Venda via widget
+## Diagrama de sequência — Venda
 
 ```mermaid
 sequenceDiagram
-    participant U as Usuário
-    participant L as LLM
-    participant M as main.py
-    participant F as FipeService
-    participant P as PricingService
-    participant W as Widget (iframe)
-    participant CRM as Mobiauto CRM
-    participant WH as n8n Webhook
+    participant C as Cliente (ChatGPT)
+    participant MCP as MCP Server
+    participant F as FIPE API
+    participant P as Pricing API
+    participant M as Mobiauto CRM
+    participant N as n8n
 
-    U->>L: "quero vender meu carro, placa ABC1234, 45000 km"
-    L->>M: avaliar_veiculo(placa="ABC1234", km=45000)
-    M->>F: consultar_por_placa (retry 3x, 60s)
-    F-->>M: dados FIPE
-    M->>P: calcular_compra(payload)
-    P-->>M: valor_proposta_compra
-    M-->>L: proposta_markdown
-
-    L-->>U: "Proposta: R$ 28.500 — quer prosseguir?"
-    U->>L: "sim"
-    L->>M: exibir_formulario_venda(placa, marca, km, valor_proposta)
-    M->>M: _LAST_SELL_PAYLOAD = sell_sc
-    M-->>L: toolOutput + outputTemplate: ui://vehicle-sell
-    L->>W: carrega resource ui://vehicle-sell
-    W-->>U: formulário de venda com dados do veículo
-
-    U->>W: preenche nome e telefone → confirma
-    W->>M: callTool registrar_interesse_venda(nome, tel, placa, ...)
-    M->>CRM: POST /api/proposal/v1.0/{dealer_id} [SELL]
-    CRM-->>M: lead_id
-    M->>WH: POST /webhook/cliente_quer_vender
-    WH-->>M: 200 OK
-    M-->>W: { registrado: true, mensagem: "..." }
-    W-->>U: "Proposta enviada! Um consultor entrará em contato."
+    C->>MCP: "Quanto pagam no meu Civic ABC1D23, 55.000 km?"
+    MCP->>F: GET /fipe?placa=ABC1D23
+    F-->>MCP: marca, modelo, valor_fipe
+    MCP->>P: POST /carro/compra (placa, fipe, km, uf)
+    P-->>MCP: { Valor_proposta_compra: 52000 }
+    MCP-->>C: Markdown com proposta + callTool exibir_formulario_venda
+    MCP-->>C: structured_content (widget formulário)
+    C->>C: Visualiza proposta, preenche nome e telefone
+    C->>MCP: callTool("registrar_interesse_venda", {...})
+    MCP->>M: POST /api/proposal/v1.0/{dealer_id} (SELL)
+    M-->>MCP: lead_id criado
+    MCP->>N: POST /webhook/cliente_quer_vender
+    N-->>MCP: 200 OK
+    MCP-->>C: "Proposta enviada! Consultor entrará em contato."
 ```
 
 ---
 
-## Resolução de dealer_id (lookup de loja)
+## Resolução de dealer_id
 
-```
-Prioridade para lead de COMPRA (por nome de loja):
-1. busca exata em cadastro de lojas → loja_unidade == nome_loja
-2. busca parcial (contains)
-3. primeira loja da lista (fallback final)
-
-Prioridade para lead de VENDA (por UF):
-1. primeiro dealer na UF informada
-2. primeira loja da lista (fallback final)
-```
-
----
-
-## Cache e estado em memória
-
-```
-_LAST_BUY_PAYLOAD   → definido por buscar_veiculos
-                       lido por resource ui://vehicle-offers
-                       resetado a cada nova chamada de buscar_veiculos
-
-_LAST_SELL_PAYLOAD  → definido por exibir_formulario_venda
-                       lido por resource ui://vehicle-sell
-                       resetado a cada nova chamada de exibir_formulario_venda
-
-_token_cache        → Bearer token Mobiauto, renovado automaticamente no 401
-_lojas_cache        → lista de lojas (PostgreSQL ou CSV), carregado uma vez por sessão
+```mermaid
+flowchart TD
+    A[Recebe loja_unidade ou uf] --> B{loja_unidade informada?}
+    B -->|Sim| C[Busca dealer_id por nome da loja]
+    C --> D{Encontrou?}
+    D -->|Sim| G[Usa dealer_id]
+    D -->|Não| E[Busca dealer_id por UF]
+    B -->|Não| E
+    E --> F{Encontrou?}
+    F -->|Sim| G
+    F -->|Não| H[Usa primeiro dealer_id da lista]
+    H --> G
 ```
 
 ---
 
-## Paginação do estoque (`estoque_total`)
+## Tratamento de falha no CRM (SELL)
 
-```
-Total de lojas: N (variável — lido do banco ou CSV)
-Lojas por página: 3
-Total de páginas: ceil(N / 3)
-
-pagina=1 → lojas[0:3]
-pagina=2 → lojas[3:6]
-...
-
-Se a página X retornar 0 veículos com imagem → avança automaticamente para X+1
-Se todas as páginas retornarem vazias → mensagem de indisponibilidade temporária
+```mermaid
+flowchart TD
+    A[POST /proposal com SELL provider] --> B{HTTP 2xx?}
+    B -->|Sim| Z[Sucesso]
+    B -->|4xx| C[Retry com BUY provider]
+    C --> D{HTTP 2xx?}
+    D -->|Sim| Z
+    D -->|Não| E[Retry sem provider]
+    E --> F{HTTP 2xx?}
+    F -->|Sim| Z
+    F -->|Não| G[Retorna registrado=false + fallback_url]
 ```

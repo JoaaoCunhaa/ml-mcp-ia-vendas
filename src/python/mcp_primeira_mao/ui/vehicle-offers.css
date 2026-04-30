@@ -89,7 +89,7 @@ html, body {
 /* ── Setas laterais (estilo Localiza) ─────────────────────── */
 .carousel-arrow {
   position: absolute;
-  top: 50%;
+  top: 174px;
   transform: translateY(-50%);
   z-index: 10;
   width: 36px;
@@ -103,7 +103,7 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  transition: background 5s, border-color 5s, color 5s;
   outline: none;
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
@@ -183,14 +183,12 @@ html, body {
 .vehicle-body__specs {
   font-size: 12px;
   color: var(--text-2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.5;
 }
 
 .vehicle-body__price {
   font-size: 22px;
-  font-weight: 800;
+  font-weight: 400;
   color: #ffffff;
   letter-spacing: -0.02em;
   line-height: 1.1;
@@ -251,12 +249,13 @@ html, body {
 }
 
 .btn--secondary {
-  background: #ffffff;
-  color: #111;
+  background: transparent;
+  color: #ffffff;
+  border: 1px solid #ffffff;
 }
 
 .btn--secondary:hover {
-  background: #f0f0f0;
+  background: rgba(255,255,255,0.10);
 }
 
 /* ── Empty / Loading state ────────────────────────────────── */

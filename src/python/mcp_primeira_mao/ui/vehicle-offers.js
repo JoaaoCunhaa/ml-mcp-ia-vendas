@@ -279,8 +279,9 @@ console.log("[vehicle-offers] inline JS carregado");
   function buildCard(vehicle) {
     var imageUrl = safeUrl(vehicle.imageUrl || vehicle.url_imagem || vehicle.image || vehicle.foto || '');
     var linkUrl  = safeUrl(vehicle.link || vehicle.url || '');
-    var title    = vehicle.title || [vehicle.brand || vehicle.marca, vehicle.model || vehicle.modelo].filter(Boolean).join(' ') || 'Veículo';
     var brand    = vehicle.brand || vehicle.marca || '';
+    var model    = vehicle.model || vehicle.modelo || '';
+    var title    = toTitleCase(model) || toTitleCase(brand) || vehicle.title || 'Veículo';
     var year     = vehicle.year || vehicle.model_year || '';
     var km       = fmtKm(vehicle.kmFormatted || vehicle.km);
     var location = vehicle.location || vehicle.store || [vehicle.loja, vehicle.cidade].filter(Boolean).join(' — ') || '';
@@ -317,23 +318,19 @@ console.log("[vehicle-offers] inline JS carregado");
     titleEl.appendChild(txt(title));
     body.appendChild(titleEl);
 
-    /* Ano sem prefixo "Ano: " */
-    var specParts = [year || null, km || null].filter(Boolean);
-    if (specParts.length) {
+    /* Linha única: ano • km | loja */
+    var infoLeft = [year || null, km || null].filter(Boolean).join(' • ');
+    var infoStr  = infoLeft && location ? infoLeft + ' | ' + location
+                 : infoLeft || location || '';
+    if (infoStr) {
       var specs = el('p', 'vehicle-body__specs');
-      specs.appendChild(txt(specParts.join(' • ')));
+      specs.appendChild(txt(infoStr));
       body.appendChild(specs);
     }
 
     var priceEl = el('p', 'vehicle-body__price');
     priceEl.appendChild(txt(fmtPrice(vehicle.price)));
     body.appendChild(priceEl);
-
-    if (location) {
-      var locEl = el('p', 'vehicle-body__location');
-      locEl.appendChild(txt('📍 ' + location));
-      body.appendChild(locEl);
-    }
 
     article.appendChild(body);
 
@@ -477,7 +474,14 @@ console.log("[vehicle-offers] inline JS carregado");
     }
     wrap.appendChild(track);
 
-    /* Setas laterais sobrepostas (estilo Localiza) */
+    /* Setas laterais sobrepostas */
+    function updateArrows() {
+      var atStart = track.scrollLeft <= 2;
+      var atEnd   = track.scrollLeft + track.clientWidth >= track.scrollWidth - 2;
+      prevBtn.style.display = atStart ? 'none' : 'flex';
+      nextBtn.style.display = atEnd   ? 'none' : 'flex';
+    }
+
     var prevBtn = el('button', 'carousel-arrow carousel-arrow--prev');
     prevBtn.setAttribute('type', 'button');
     prevBtn.setAttribute('aria-label', 'Anterior');
@@ -494,9 +498,16 @@ console.log("[vehicle-offers] inline JS carregado");
       track.scrollBy({ left: 300, behavior: 'smooth' });
     });
 
+    /* Prev começa sempre oculto (carrossel inicia no início) */
+    prevBtn.style.display = 'none';
+
     wrap.appendChild(prevBtn);
     wrap.appendChild(nextBtn);
     app.appendChild(wrap);
+
+    /* Aguarda o browser calcular layout antes de verificar o estado */
+    requestAnimationFrame(function () { requestAnimationFrame(updateArrows); });
+    track.addEventListener('scroll', updateArrows);
     log('renderizado | ' + vehicles.length + ' cards');
   }
 
